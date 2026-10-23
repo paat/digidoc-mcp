@@ -1,0 +1,5 @@
+digidoc-mcp
+Copyright 2026 Andre Tšernikov
+
+This project depends on and bundles digidoc4j and the EU DSS libraries,
+which are licensed under LGPL-2.1. Their licenses apply to those components.

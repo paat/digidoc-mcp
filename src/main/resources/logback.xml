@@ -1,0 +1,8 @@
+<configuration>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <!-- Dependency messages can contain attacker-controlled metadata; bound each message. -->
+    <encoder><pattern>%d{HH:mm:ss} %-5level %logger{36} - %.-2048msg%n%nopex</pattern></encoder>
+  </appender>
+  <root level="WARN"><appender-ref ref="STDERR"/></root>
+</configuration>
