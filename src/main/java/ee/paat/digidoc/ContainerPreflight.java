@@ -186,6 +186,7 @@ final class ContainerPreflight {
         boolean root = true;
         boolean unsafeDeclaration = false;
         String type = null;
+        long declaredSize = 0;
         StringBuilder body = new StringBuilder();
         try {
             var reader = factory.createXMLStreamReader(new ByteArrayInputStream(bytes, start, bytes.length - start));
@@ -209,6 +210,15 @@ final class ContainerPreflight {
                             try { PathPolicy.fileName(reader.getAttributeValue(null, "Filename")); }
                             catch (ToolException e) { throw unsupported(); }
                             if (inDataFile || !("EMBEDDED_BASE64".equals(type) || "EMBEDDED".equals(type))) throw unsupported();
+                            String size = reader.getAttributeValue("", "Size");
+                            declaredSize = 0;
+                            if (size != null) {
+                                if (!size.matches("[0-9]+")) throw unsupported();
+                                try { declaredSize = Long.parseLong(size); }
+                                catch (NumberFormatException e) { throw tooLarge(); }
+                            }
+                            // The legacy reader allocates from Size before reading the body.
+                            budget.bytes(declaredSize);
                             inDataFile = true;
                             hasBody = false;
                             body.setLength(0);
@@ -224,7 +234,7 @@ final class ContainerPreflight {
                             payload = "EMBEDDED_BASE64".equals(type) ? Base64.getMimeDecoder().decode(body.toString())
                                     : body.toString().getBytes(StandardCharsets.UTF_8);
                         } catch (IllegalArgumentException e) { throw unsupported(); }
-                        budget.bytes(payload.length);
+                        budget.bytes(Math.max(0L, payload.length - declaredSize));
                         check(payload, budget, depth + 1, false, false);
                         inDataFile = false;
                     }
