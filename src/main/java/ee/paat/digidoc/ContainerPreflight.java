@@ -114,9 +114,12 @@ final class ContainerPreflight {
             if (afterData > centralOffset) throw unsupported();
             byte[] expanded = inflate(bytes, data, entry, budget);
             contents.add(expanded);
-            // Recognize the MIME value independently of filename aliases and entry ordering.
-            if (Arrays.equals(expanded, "application/vnd.etsi.asic-s+zip".getBytes(StandardCharsets.US_ASCII))) {
-                asics = true;
+            // Mirror DigiDoc4j 6.2.0 AsicContainerParser.isMimeType/extractMimeType
+            // and ContainerOpener.isAsicSContainer: name ignores case; MIME value does not.
+            if ("mimetype".equalsIgnoreCase(new String(entry.name, StandardCharsets.UTF_8))) {
+                String mimeType = new String(expanded, StandardCharsets.UTF_8);
+                if (mimeType.startsWith("\uFEFF")) mimeType = mimeType.substring(1);
+                asics = "application/vnd.etsi.asic-s+zip".equals(mimeType.trim());
             }
             nextLocal = afterData;
             if ((entry.flags & 8) != 0) {

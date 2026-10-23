@@ -2,10 +2,16 @@ package ee.paat.digidoc;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.digidoc4j.Configuration;
+import org.digidoc4j.impl.asic.AsicStreamContainerParser;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.zip.CRC32;
@@ -56,6 +62,55 @@ class ZipPreflightTest {
             output.closeEntry();
         }
         rejected(bytes.toByteArray(), 4096, "UNSUPPORTED_CONTAINER");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\uFEFFapplication/vnd.etsi.asic-s+zip", "application/vnd.etsi.asic-s+zip\n",
+            "\uFEFF \tapplication/vnd.etsi.asic-s+zip\r\n"})
+    void normalizedAsicsMimeTypeRejectsDtd(String mimeType) throws Exception {
+        byte[] bytes = xmlWithMimeType("MiMeTyPe", mimeType, false);
+        // Confirm the normalization against the actual pinned DigiDoc4j parser.
+        var parsed = new AsicStreamContainerParser(new ByteArrayInputStream(bytes),
+                new Configuration(Configuration.Mode.TEST)).read();
+        assertEquals("application/vnd.etsi.asic-s+zip", parsed.getMimeType());
+        rejected(bytes, 4096, "UNSUPPORTED_CONTAINER");
+    }
+
+    @Test void asiceDataContainingAsicsMimeTypeDoesNotTriggerDtdGuard() throws Exception {
+        byte[] bytes = xmlWithMimeType("mimetype", "application/vnd.etsi.asic-e+zip", true);
+        preflight(bytes, 4096);
+        Path file = Files.write(root.resolve("ordinary.asice"), bytes);
+        assertEquals("ASICE", TestFixtures.service(root).openContainer(file.toString()).get("type"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"valid-asice.asice", "timestamp-only.asics", "composite-asics.asics", "composite-b-bes.asics"})
+    void committedContainerFixturesStillOpen(String name) throws Exception {
+        Path file = root.resolve(name);
+        try (var input = getClass().getResourceAsStream("/fixtures/" + name)) {
+            assertNotNull(input);
+            Files.copy(input, file);
+        }
+        assertNotNull(TestFixtures.service(root).openContainer(file.toString()).get("type"));
+    }
+
+    private static byte[] xmlWithMimeType(String name, String mimeType, boolean mimeData) throws Exception {
+        var bytes = new ByteArrayOutputStream();
+        try (var output = new ZipOutputStream(bytes)) {
+            output.putNextEntry(new ZipEntry("payload.xml"));
+            output.write("<!DOCTYPE ordinary [<!ENTITY text 'data'>]><ordinary>&text;</ordinary>"
+                    .getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+            if (mimeData) {
+                output.putNextEntry(new ZipEntry("ordinary.txt"));
+                output.write("application/vnd.etsi.asic-s+zip".getBytes(StandardCharsets.UTF_8));
+                output.closeEntry();
+            }
+            output.putNextEntry(new ZipEntry(name));
+            output.write(mimeType.getBytes(StandardCharsets.UTF_8));
+            output.closeEntry();
+        }
+        return bytes.toByteArray();
     }
 
     @Test void nestingDepthBombIsRejected() throws Exception {
