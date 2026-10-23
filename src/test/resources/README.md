@@ -1,6 +1,6 @@
 # Test fixtures
 
-The files under `fixtures/` originate from [open-eid/digidoc4j](https://github.com/open-eid/digidoc4j), commit `61978f47a9fa595a01fe8b288a53fa1f8138e893`:
+The following files under `fixtures/` originate from [open-eid/digidoc4j](https://github.com/open-eid/digidoc4j), commit `61978f47a9fa595a01fe8b288a53fa1f8138e893`:
 
 | Local file | Upstream path under `digidoc4j/src/test/resources/` |
 | --- | --- |
@@ -47,3 +47,5 @@ Offline tests check nested signature counts and metadata without initializing a
 TSL cache. Network tests check the LT composite and compare the B_BES composite's
 inner indication with digidoc4j's own nested validation report. The B_BES fixture
 lacks long-term validation evidence and reports INDETERMINATE in TEST mode.
+
+`timestamp-only.asics` was generated for issue #3 with digidoc4j 6.2.0 in TEST mode and the bundled test TSA (`http://tsa.demo.sk.ee/tsa`) on 2026-10-23. It contains the public text `Timestamp-only ASiC-S regression fixture for issue #3.` and one RFC 3161 timestamp, with no signatures. It is a project-generated Apache-2.0 test fixture. `TimestampValidationNetworkTest` checks its timestamp-only structure and validates it using TEST trust lists. To regenerate, build an ASICS container with that text as `timestamped.txt` (`text/plain`), add `TimestampBuilder.aTimestamp(container).invokeTimestamping()`, and save it. No private signing key is used.

@@ -272,7 +272,12 @@ public final class ContainerService {
         }
         // Timestamp-only ASiC-S containers must also contribute their cryptographic result.
         for (String id : report.getTimestampIdList()) {
-            indications.add(name(report.getIndication(id)));
+            String indication = name(report.getIndication(id));
+            if (indication == null) {
+                ValidationResult result = report.getValidationResult(id);
+                indication = result == null ? "INDETERMINATE" : result.isValid() ? "PASSED" : "FAILED";
+            }
+            indications.add(indication);
         }
         return object("result", validationVerdict(!report.getContainerErrors().isEmpty(), report.isValid(), indications),
                 "signatures", signatures, "errors", diagnostics(report.getContainerErrors(), false),
