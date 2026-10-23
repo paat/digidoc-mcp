@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -85,13 +86,21 @@ final class TestFixtures {
              var output = new ZipOutputStream(Files.newOutputStream(destination))) {
             ZipEntry entry;
             while ((entry = input.getNextEntry()) != null) {
-                output.putNextEntry(new ZipEntry(entry.getName()));
+                byte[] bytes = input.readAllBytes();
                 if (entry.getName().equals("test.txt")) {
-                    output.write("tampered after signing".getBytes(StandardCharsets.UTF_8));
+                    bytes = "tampered after signing".getBytes(StandardCharsets.UTF_8);
                     replaced = true;
-                } else {
-                    input.transferTo(output);
                 }
+                ZipEntry rewritten = new ZipEntry(entry.getName());
+                rewritten.setMethod(entry.getMethod());
+                if (entry.getMethod() == ZipEntry.STORED) {
+                    CRC32 crc = new CRC32();
+                    crc.update(bytes);
+                    rewritten.setSize(bytes.length);
+                    rewritten.setCrc(crc.getValue());
+                }
+                output.putNextEntry(rewritten);
+                output.write(bytes);
                 output.closeEntry();
             }
         }

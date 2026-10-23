@@ -36,6 +36,8 @@ class ValidationNetworkTest {
         Path tampered = TestFixtures.tampered(valid, root.resolve("tampered.asice"));
         var result = TestFixtures.service(root).validateContainer(tampered.toString());
         assertEquals("INVALID", result.get("result"), result.toString());
-        assertEquals(1, ContainerServiceTest.rows(result.get("signatures")).size());
+        var signatures = ContainerServiceTest.rows(result.get("signatures"));
+        assertEquals(1, signatures.size());
+        assertEquals("HASH_FAILURE", signatures.getFirst().get("sub_indication"), result.toString());
     }
 }
