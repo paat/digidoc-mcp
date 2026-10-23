@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -51,16 +50,9 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import javax.xml.stream.XMLInputFactory;
-import javax.xml.stream.XMLStreamConstants;
-import javax.xml.stream.XMLStreamException;
 
 /** Read-only container operations; extraction is the sole document filesystem write. */
 public final class ContainerService {
-    // More generous than typical filesystem components, but bounds exact extraction keys and output.
-    private static final int MAX_NAME_BYTES = 1024;
     private final AppConfig config;
     private final PathPolicy paths;
     private final Configuration digiDoc;
@@ -325,65 +317,7 @@ public final class ContainerService {
     }
 
     private void preflightZip(byte[] bytes) throws IOException {
-        if (bytes.length < 4 || bytes[0] != 'P' || bytes[1] != 'K') {
-            preflightLegacyXml(bytes);
-            return;
-        }
-        long remaining = config.maxBytes();
-        int entries = 0;
-        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                checkNameLength(entry.getName());
-                if (++entries > 10_000) throw tooLarge();
-                if (entry.getSize() > remaining) throw tooLarge();
-                remaining -= copyBounded(zip, OutputStream.nullOutputStream(), remaining, null);
-                zip.closeEntry();
-            }
-        }
-    }
-
-    /** DDOC's legacy reader can resolve body-less data files from disk; accept embedded bodies only. */
-    private static void preflightLegacyXml(byte[] bytes) {
-        XMLInputFactory factory = XMLInputFactory.newFactory();
-        factory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
-        factory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
-        boolean inDataFile = false;
-        boolean hasBody = false;
-        try {
-            var reader = factory.createXMLStreamReader(new ByteArrayInputStream(bytes));
-            try {
-                while (reader.hasNext()) {
-                    int event = reader.next();
-                    if (event == XMLStreamConstants.DTD || event == XMLStreamConstants.ENTITY_REFERENCE) {
-                        throw new ToolException("UNSUPPORTED_CONTAINER", "External XML declarations are not supported.");
-                    }
-                    if (event == XMLStreamConstants.START_ELEMENT && "DataFile".equals(reader.getLocalName())) {
-                        String type = reader.getAttributeValue(null, "ContentType");
-                        checkNameLength(reader.getAttributeValue(null, "Filename"));
-                        // The legacy facade strips path components: refuse them instead of exposing aliases.
-                        try {
-                            PathPolicy.fileName(reader.getAttributeValue(null, "Filename"));
-                        } catch (ToolException e) {
-                            throw new ToolException("UNSUPPORTED_CONTAINER", "DDOC data file names must be safe single file names.");
-                        }
-                        if (inDataFile || !("EMBEDDED_BASE64".equals(type) || "EMBEDDED".equals(type))) {
-                            throw new ToolException("UNSUPPORTED_CONTAINER", "Only embedded DDOC data files are supported.");
-                        }
-                        inDataFile = true;
-                        hasBody = false;
-                    } else if (inDataFile && (event == XMLStreamConstants.CHARACTERS || event == XMLStreamConstants.CDATA)
-                            && !reader.isWhiteSpace()) {
-                        hasBody = true;
-                    } else if (event == XMLStreamConstants.END_ELEMENT && "DataFile".equals(reader.getLocalName())) {
-                        if (!hasBody) throw new ToolException("UNSUPPORTED_CONTAINER", "Empty or external DDOC data files are not supported.");
-                        inDataFile = false;
-                    }
-                }
-            } finally { reader.close(); }
-        } catch (XMLStreamException e) {
-            throw new ToolException("CONTAINER_ERROR", "The container could not be processed.");
-        }
+        ContainerPreflight.check(bytes, config.maxBytes());
     }
 
     static long copyBounded(InputStream input, OutputStream output, long limit, MessageDigest digest) throws IOException {
@@ -407,11 +341,6 @@ public final class ContainerService {
     }
 
     private static ToolException tooLarge() { return new ToolException("SIZE_LIMIT", "Container or extracted data exceeds the configured byte limit."); }
-    private static void checkNameLength(String name) {
-        if (name != null && name.getBytes(StandardCharsets.UTF_8).length > MAX_NAME_BYTES) {
-            throw new ToolException("NAME_LIMIT", "Container entry names must not exceed 1024 UTF-8 bytes.");
-        }
-    }
     private static MessageDigest sha256() {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable"); }
