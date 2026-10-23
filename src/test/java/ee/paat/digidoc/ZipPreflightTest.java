@@ -73,6 +73,37 @@ class ZipPreflightTest {
         rejected(bytes.toByteArray(), 4096, "UNSUPPORTED_CONTAINER");
     }
 
+    @Test void concatenatedArchiveHiddenInCommentWithOversizedLengthIsRejected() throws Exception {
+        byte[] first = zip("first.txt", new byte[10]);
+        byte[] second = zip("second.txt", new byte[10]);
+        byte[] bytes = Arrays.copyOf(first, first.length + second.length);
+        System.arraycopy(second, 0, bytes, first.length, second.length);
+        // The first EOCD treats the concatenated archive as its comment. The second
+        // EOCD's impossible comment length must not hide its signature from preflight.
+        bytes[first.length - 2] = (byte) second.length;
+        bytes[first.length - 1] = (byte) (second.length >>> 8);
+        bytes[bytes.length - 2] = (byte) 0xff;
+        bytes[bytes.length - 1] = (byte) 0xff;
+        rejected(bytes, 4096, "UNSUPPORTED_CONTAINER");
+    }
+
+    @Test void truncatedEocdSignatureInCommentIsRejected() throws Exception {
+        byte[] original = zip("file.txt", new byte[10]);
+        byte[] bytes = Arrays.copyOf(original, original.length + 4);
+        bytes[original.length - 2] = 4;
+        put32(bytes, original.length, 0x06054b50);
+        rejected(bytes, 4096, "UNSUPPORTED_CONTAINER");
+    }
+
+    @Test void ordinaryArchiveCommentStillPasses() throws Exception {
+        byte[] original = zip("file.txt", new byte[10]);
+        byte[] comment = "ordinary comment".getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = Arrays.copyOf(original, original.length + comment.length);
+        System.arraycopy(comment, 0, bytes, original.length, comment.length);
+        bytes[original.length - 2] = (byte) comment.length;
+        preflight(bytes, 4096);
+    }
+
     @Test void trailingBytesAreRejected() throws Exception {
         byte[] original = zip("file.txt", new byte[10]);
         rejected(Arrays.copyOf(original, original.length + 1), 4096, "UNSUPPORTED_CONTAINER");

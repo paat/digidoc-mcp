@@ -130,9 +130,10 @@ final class ContainerPreflight {
             }
         }
         if (nextLocal != centralOffset) throw unsupported();
-        // A second record in the archive comment is also ambiguous, unlike an EOCD inside a data entry.
-        for (int i = end + 22; i <= bytes.length - 22; i++) {
-            if (u32(bytes, i) == 0x06054b50L && (long) i + 22 + u16(bytes, i + 20) <= bytes.length) {
+        // Reject every EOCD signature in the comment, even a truncated or invalid-length record.
+        // EOCDs inside nested data entries belong to those containers and are checked recursively.
+        for (int i = end + 22; i <= bytes.length - 4; i++) {
+            if (u32(bytes, i) == 0x06054b50L) {
                 throw unsupported();
             }
         }
