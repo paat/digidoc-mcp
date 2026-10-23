@@ -80,7 +80,6 @@ public final class ContainerService {
             cache.setCacheExpirationTime(digiDoc.getTslCacheExpirationTime());
             return cache;
         });
-        inspection.setTslFileLoaderFactory(digiDoc.getTslFileLoaderFactory());
     }
 
     /** DigiDoc normally reads cwd YAML implicitly; the server's only configuration surface is its environment. */
