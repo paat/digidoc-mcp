@@ -191,6 +191,7 @@ final class ContainerPreflight {
         boolean unsafeDeclaration = false;
         String type = null;
         long declaredSize = 0;
+        long bodyLimit = 0;
         StringBuilder body = new StringBuilder();
         try {
             var reader = factory.createXMLStreamReader(new ByteArrayInputStream(bytes, start, bytes.length - start));
@@ -221,6 +222,9 @@ final class ContainerPreflight {
                                 try { declaredSize = Long.parseLong(size); }
                                 catch (NumberFormatException e) { throw tooLarge(); }
                             }
+                            // Size reserves this file's bytes, so measure its allowance before that charge.
+                            long allowance = Math.min(budget.remaining, Integer.MAX_VALUE);
+                            bodyLimit = "EMBEDDED_BASE64".equals(type) ? ((allowance + 2) / 3) * 4 : allowance;
                             // The legacy reader allocates from Size before reading the body.
                             budget.bytes(declaredSize);
                             inDataFile = true;
@@ -230,7 +234,15 @@ final class ContainerPreflight {
                         }
                     } else if (inDataFile && (event == XMLStreamConstants.CHARACTERS || event == XMLStreamConstants.CDATA)) {
                         if (!reader.isWhiteSpace()) hasBody = true;
-                        body.append(reader.getText());
+                        char[] text = reader.getTextCharacters();
+                        int end = reader.getTextStart() + reader.getTextLength();
+                        for (int i = reader.getTextStart(); i < end; i++) {
+                            char value = text[i];
+                            // Ignored base64 whitespace must not occupy an unbounded buffer either.
+                            if ("EMBEDDED_BASE64".equals(type) && Character.isWhitespace(value)) continue;
+                            if (body.length() >= bodyLimit) throw tooLarge();
+                            body.append(value);
+                        }
                     } else if (event == XMLStreamConstants.END_ELEMENT && "DataFile".equals(reader.getLocalName())) {
                         if (!hasBody) throw unsupported();
                         byte[] payload;

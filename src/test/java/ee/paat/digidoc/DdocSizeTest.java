@@ -101,6 +101,33 @@ class DdocSizeTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(strings = {"EMBEDDED_BASE64", "EMBEDDED"})
+    void oversizedBodyFailsWhileStreamingBeforeReachingMalformedTail(String type) {
+        String prefix = "<SignedDoc><DataFile ContentType=\"" + type + "\" Filename=\"payload.txt\">";
+        // The undeclared entity is a tripwire: buffering through the tail reports
+        // CONTAINER_ERROR instead of SIZE_LIMIT. No closing DataFile reaches decoding.
+        for (String body : new String[] {"A".repeat(8192), "<![CDATA[" + "A".repeat(8192) + "]]>"}) {
+            byte[] bytes = (prefix + body + "&unresolved;</DataFile></SignedDoc>").getBytes(StandardCharsets.UTF_8);
+            assertRejected(bytes, 16, "SIZE_LIMIT");
+        }
+    }
+
+    @Test void base64WhitespaceDoesNotConsumeBodyAllowance() throws Exception {
+        byte[] bytes = new String(ddoc("1", new byte[] {'A'}), StandardCharsets.UTF_8)
+                .replace("QQ==", " \t\n".repeat(1000) + "Q \nQ\t==" + " \t\n".repeat(1000))
+                .getBytes(StandardCharsets.UTF_8);
+        ContainerPreflight.check(bytes, 1);
+    }
+
+    @Test void decodedLengthStillEnforcesBase64RoundingAndEmbeddedUtf8() throws Exception {
+        assertRejected(ddoc(null, new byte[3]), 1, "SIZE_LIMIT");
+        ContainerPreflight.check(ddoc(null, new byte[3]), 3);
+        byte[] embedded = "<SignedDoc><DataFile ContentType=\"EMBEDDED\" Filename=\"payload.txt\">é</DataFile></SignedDoc>"
+                .getBytes(StandardCharsets.UTF_8);
+        assertRejected(embedded, 1, "SIZE_LIMIT");
+        ContainerPreflight.check(embedded, 2);
+    }
+
     @Test void toolErrorRemainsTextOnlyAndDoesNotDiscloseInput() throws Exception {
         byte[] bytes = ddoc("1073741823", new byte[] {'A'});
         // This assertion also keeps the vulnerable test run away from the allocating builder.
