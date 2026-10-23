@@ -1,5 +1,7 @@
 # digidoc-mcp
 
+[![CI](https://github.com/paat/digidoc-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/paat/digidoc-mcp/actions/workflows/ci.yml)
+
 An **unofficial** read-only MCP server for inspecting and validating Estonian DigiDoc containers. This project is **not affiliated with or endorsed by RIA**. It uses [DigiDoc4j](https://github.com/open-eid/digidoc4j) and the [official MCP Java SDK](https://github.com/modelcontextprotocol/java-sdk), with MCP JSON-RPC over stdio.
 
 The server opens ASiC-E / BDOC containers, lists signatures, extracts individual data files, and validates signatures. ASiC-S and legacy DDOC are supported where DigiDoc4j supports them. It exposes no signing, container creation, or CDOC tools. Extraction writes a separate file; it does not modify the source container.
@@ -145,4 +147,8 @@ mvn -B verify -DskipNetworkTests       # Excludes tests tagged "network"
 
 The default suite validates test-signed fixtures in TEST mode, detects tampered data, inspects multiple files and signatures, checks confinement and extraction limits, and launches the packaged jar for an MCP stdio smoke test. The smoke test initializes the server, checks the four advertised tools, calls `open_container`, and rejects any non-JSON stdout line. Network-dependent tests need reachable trust-list services; skipping them does not verify live trust validation. Maven still needs cached dependencies or network access to resolve them.
 
-Fixture sources and attribution are recorded in [src/test/resources/README.md](src/test/resources/README.md). No project license has been selected yet; dependency and fixture licenses remain their own.
+Fixture sources and attribution are recorded in [src/test/resources/README.md](src/test/resources/README.md).
+
+## License
+
+This project is licensed under [Apache-2.0](LICENSE). The shaded jar bundles digidoc4j and the EU DSS libraries under LGPL-2.1; their licenses apply to those components. See [NOTICE](NOTICE). Test fixtures retain their upstream LGPL-2.1 license.
