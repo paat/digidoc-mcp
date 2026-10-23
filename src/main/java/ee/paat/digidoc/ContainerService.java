@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -50,6 +51,8 @@ import javax.xml.stream.XMLStreamException;
 
 /** Read-only container operations; extraction is the sole document filesystem write. */
 public final class ContainerService {
+    // More generous than typical filesystem components, but bounds exact extraction keys and output.
+    private static final int MAX_NAME_BYTES = 1024;
     private final AppConfig config;
     private final PathPolicy paths;
     private final Configuration digiDoc;
@@ -254,6 +257,7 @@ public final class ContainerService {
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                checkNameLength(entry.getName());
                 if (++entries > 10_000) throw tooLarge();
                 if (entry.getSize() > remaining) throw tooLarge();
                 remaining -= copyBounded(zip, OutputStream.nullOutputStream(), remaining, null);
@@ -279,6 +283,7 @@ public final class ContainerService {
                     }
                     if (event == XMLStreamConstants.START_ELEMENT && "DataFile".equals(reader.getLocalName())) {
                         String type = reader.getAttributeValue(null, "ContentType");
+                        checkNameLength(reader.getAttributeValue(null, "Filename"));
                         // The legacy facade strips path components: refuse them instead of exposing aliases.
                         try {
                             PathPolicy.fileName(reader.getAttributeValue(null, "Filename"));
@@ -325,6 +330,11 @@ public final class ContainerService {
     }
 
     private static ToolException tooLarge() { return new ToolException("SIZE_LIMIT", "Container or extracted data exceeds the configured byte limit."); }
+    private static void checkNameLength(String name) {
+        if (name != null && name.getBytes(StandardCharsets.UTF_8).length > MAX_NAME_BYTES) {
+            throw new ToolException("NAME_LIMIT", "Container entry names must not exceed 1024 UTF-8 bytes.");
+        }
+    }
     private static MessageDigest sha256() {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable"); }
