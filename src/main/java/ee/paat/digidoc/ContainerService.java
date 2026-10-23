@@ -44,6 +44,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import javax.xml.stream.XMLInputFactory;
@@ -58,8 +65,24 @@ public final class ContainerService {
     private final PathPolicy paths;
     private final Configuration digiDoc;
     private final Configuration inspection;
+    private final Supplier<Map<String, Object>> validationOperation;
+    // One worker owns the online Configuration, including build(), TSL refresh and report access.
+    // A timed-out library call may ignore interruption: never replace it with another worker.
+    private final ThreadPoolExecutor validationExecutor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(1), task -> {
+                Thread thread = new Thread(task, "digidoc-validation");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     public ContainerService(AppConfig config) {
+        this(config, null);
+    }
+
+    /** Offline test seam for validation that blocks or ignores interruption. */
+    ContainerService(AppConfig config, Supplier<Map<String, Object>> validationOperation) {
+        validationExecutor.allowCoreThreadTimeOut(true);
+        this.validationOperation = validationOperation;
         this.config = config;
         this.paths = new PathPolicy(config.roots());
         this.digiDoc = new BundledConfiguration(config.mode());
@@ -181,7 +204,33 @@ public final class ContainerService {
         });
     }
 
-    public synchronized Map<String, Object> validateContainer(String path) {
+    public Map<String, Object> validateContainer(String path) {
+        long started = System.nanoTime();
+        FutureTask<Map<String, Object>> task = new FutureTask<>(() -> validateNow(path));
+        try {
+            validationExecutor.execute(task);
+            long remaining = TimeUnit.SECONDS.toNanos(config.validationTimeoutSeconds()) - (System.nanoTime() - started);
+            return task.get(Math.max(0, remaining), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException | RejectedExecutionException e) {
+            throw validationTimeout();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw validationTimeout();
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof ToolException error) throw error;
+            throw new ToolException("CONTAINER_ERROR", "The container could not be processed.");
+        } finally {
+            task.cancel(true);
+            validationExecutor.remove(task);
+        }
+    }
+
+    private static ToolException validationTimeout() {
+        return new ToolException("VALIDATION_TIMEOUT", "Validation exceeded its deadline.");
+    }
+
+    private Map<String, Object> validateNow(String path) {
+        if (validationOperation != null) return safely(validationOperation);
         return safely(() -> {
             Container container = open(path, digiDoc);
             ContainerValidationResult report = container.validate();

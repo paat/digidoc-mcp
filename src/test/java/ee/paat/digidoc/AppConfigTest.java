@@ -19,6 +19,7 @@ class AppConfigTest {
         assertEquals(java.util.List.of(Path.of("").toRealPath()), config.roots());
         assertEquals(Configuration.Mode.PROD, config.mode());
         assertEquals(100L * 1024 * 1024, config.maxBytes());
+        assertEquals(120, config.validationTimeoutSeconds());
         assertEquals(Path.of(System.getProperty("user.home"), ".cache", "digidoc-mcp", "tsl").toAbsolutePath(), config.tslCache());
     }
 
@@ -29,15 +30,25 @@ class AppConfigTest {
         AppConfig config = AppConfig.fromEnvironment(Map.of(
                 "DIGIDOC_MCP_ROOTS", first + File.pathSeparator + second,
                 "DIGIDOC_MCP_MODE", "test", "DIGIDOC_MCP_MAX_BYTES", "4096",
-                "DIGIDOC_MCP_TSL_CACHE", cache.toString()));
+                "DIGIDOC_MCP_TSL_CACHE", cache.toString(), "DIGIDOC_MCP_VALIDATION_TIMEOUT_SECONDS", "7"));
         assertEquals(java.util.List.of(first.toRealPath(), second.toRealPath()), config.roots());
         assertEquals(Configuration.Mode.TEST, config.mode());
         assertEquals(4096, config.maxBytes());
         assertEquals(cache.toAbsolutePath(), config.tslCache());
+        assertEquals(7, config.validationTimeoutSeconds());
     }
 
     @Test void invalidModeDoesNotSilentlyUseProduction() {
         assertThrows(RuntimeException.class, () -> AppConfig.fromEnvironment(Map.of("DIGIDOC_MCP_MODE", "typo")));
+    }
+
+    @Test void invalidValidationDeadlinesAreRejectedWithoutDisclosingTheirValue() {
+        for (String value : java.util.List.of("0", "-1", "1.5", "PRIVATE_CONFIG", "9223372036854775807")) {
+            ToolException error = assertThrows(ToolException.class, () -> AppConfig.fromEnvironment(
+                    Map.of("DIGIDOC_MCP_VALIDATION_TIMEOUT_SECONDS", value)));
+            assertEquals("INVALID_CONFIG", error.code());
+            assertFalse(error.getMessage().contains(value));
+        }
     }
 
     @Test void nonpositiveSizeDoesNotDisableLimit() {
