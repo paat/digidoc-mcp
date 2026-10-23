@@ -3,6 +3,7 @@ package ee.paat.digidoc;
 import eu.europa.esig.dss.service.http.commons.CommonsDataLoader;
 import eu.europa.esig.dss.service.http.commons.FileCacheDataLoader;
 import org.digidoc4j.Configuration;
+import org.digidoc4j.CompositeContainer;
 import org.digidoc4j.Container;
 import org.digidoc4j.ContainerBuilder;
 import org.digidoc4j.ContainerValidationResult;
@@ -22,6 +23,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -50,6 +52,8 @@ import javax.xml.stream.XMLStreamException;
 
 /** Read-only container operations; extraction is the sole document filesystem write. */
 public final class ContainerService {
+    // More generous than typical filesystem components, but bounds exact extraction keys and output.
+    private static final int MAX_NAME_BYTES = 1024;
     private final AppConfig config;
     private final PathPolicy paths;
     private final Configuration digiDoc;
@@ -107,14 +111,14 @@ public final class ContainerService {
             for (DataFile file : container.getDataFiles()) {
                 files.add(object("name", dataName(file), "mime_type", bounded(file.getMediaType()), "size_bytes", file.getFileSize()));
             }
-            return object("type", container.getType(), "data_files", files, "signature_count", container.getSignatures().size());
+            return object("type", container.getType(), "data_files", files, "signature_count", containerSignatures(container).size());
         });
     }
 
     public synchronized Map<String, Object> listSignatures(String path) {
         return safely(() -> {
             List<Map<String, Object>> signatures = new ArrayList<>();
-            for (Signature signature : open(path).getSignatures()) {
+            for (Signature signature : containerSignatures(open(path))) {
                 X509Cert cert = signature.getSigningCertificate();
                 signatures.add(object("id", bounded(signature.getId()),
                         "signer_common_name", subject(cert, X509Cert.SubjectName.CN),
@@ -181,38 +185,60 @@ public final class ContainerService {
         return safely(() -> {
             Container container = open(path, digiDoc);
             ContainerValidationResult report = container.validate();
-            List<Map<String, Object>> signatures = new ArrayList<>();
-            boolean failed = !report.getContainerErrors().isEmpty();
-            boolean indeterminate = false;
-            for (Signature signature : container.getSignatures()) {
-                String id = signature.getUniqueId();
-                String indication = name(report.getIndication(id));
-                String subIndication = name(report.getSubIndication(id));
-                ValidationResult result = report.getValidationResult(id);
-                if (indication == null) indication = result == null ? "INDETERMINATE"
-                        : result.isValid() ? "TOTAL_PASSED" : "TOTAL_FAILED";
-                if (indication.equals("TOTAL_FAILED") || indication.equals("FAILED")) failed = true;
-                else if (!indication.equals("TOTAL_PASSED") && !indication.equals("PASSED")) indeterminate = true;
-                signatures.add(object("id", bounded(signature.getId()), "indication", indication,
-                        "sub_indication", subIndication,
-                        "errors", diagnostics(result == null ? List.of() : result.getErrors(), false),
-                        "warnings", diagnostics(result == null ? List.of() : result.getWarnings(), true),
-                        "signer", subject(signature.getSigningCertificate(), X509Cert.SubjectName.CN),
-                        "signing_time", instant(signature.getTrustedSigningTime() == null
-                                ? signature.getClaimedSigningTime() : signature.getTrustedSigningTime()),
-                        "profile", profile(signature.getProfile())));
-            }
-            // Timestamp-only ASiC-S containers must also contribute their cryptographic result.
-            for (String id : report.getTimestampIdList()) {
-                String indication = name(report.getIndication(id));
-                if ("TOTAL_FAILED".equals(indication) || "FAILED".equals(indication)) failed = true;
-                else if (!"TOTAL_PASSED".equals(indication) && !"PASSED".equals(indication)) indeterminate = true;
-            }
-            String result = failed ? "INVALID" : indeterminate ? "INDETERMINATE" : report.isValid() ? "VALID" : "INVALID";
-            if (container.getSignatures().isEmpty() && report.getTimestampIdList().isEmpty()) result = "INDETERMINATE";
-            return object("result", result, "signatures", signatures,
-                    "errors", diagnostics(report.getContainerErrors(), false), "warnings", diagnostics(report.getContainerWarnings(), true));
+            return validationSummary(containerSignatures(container), report);
         });
+    }
+
+    private static List<Signature> containerSignatures(Container container) {
+        if (!(container instanceof CompositeContainer composite)) return container.getSignatures();
+        List<Signature> signatures = new ArrayList<>(composite.getNestingContainerSignatures());
+        signatures.addAll(composite.getNestedContainerSignatures());
+        return signatures;
+    }
+
+    /** Projects an already computed report without fetching trust or validating again. */
+    static Map<String, Object> validationSummary(List<Signature> containerSignatures, ContainerValidationResult report) {
+        Map<String, Signature> metadata = new LinkedHashMap<>();
+        for (Signature signature : containerSignatures) metadata.put(signature.getUniqueId(), signature);
+        List<Map<String, Object>> signatures = new ArrayList<>();
+        List<String> indications = new ArrayList<>();
+        // digidoc4j's composite report includes both nested and nesting signature IDs.
+        // The report is authoritative even when a signature has no available metadata.
+        for (String id : report.getSignatureIdList()) {
+            Signature signature = metadata.get(id);
+            String indication = name(report.getIndication(id));
+            String subIndication = name(report.getSubIndication(id));
+            ValidationResult result = report.getValidationResult(id);
+            if (indication == null) indication = result == null ? "INDETERMINATE"
+                    : result.isValid() ? "TOTAL_PASSED" : "TOTAL_FAILED";
+            indications.add(indication);
+            signatures.add(object("id", bounded(signature == null ? id : signature.getId()), "indication", indication,
+                    "sub_indication", subIndication,
+                    "errors", diagnostics(result == null ? List.of() : result.getErrors(), false),
+                    "warnings", diagnostics(result == null ? List.of() : result.getWarnings(), true),
+                    "signer", signature == null ? null : subject(signature.getSigningCertificate(), X509Cert.SubjectName.CN),
+                    "signing_time", signature == null ? null : instant(signature.getTrustedSigningTime() == null
+                            ? signature.getClaimedSigningTime() : signature.getTrustedSigningTime()),
+                    "profile", signature == null ? null : profile(signature.getProfile())));
+        }
+        // Timestamp-only ASiC-S containers must also contribute their cryptographic result.
+        for (String id : report.getTimestampIdList()) {
+            indications.add(name(report.getIndication(id)));
+        }
+        return object("result", validationVerdict(!report.getContainerErrors().isEmpty(), report.isValid(), indications),
+                "signatures", signatures, "errors", diagnostics(report.getContainerErrors(), false),
+                "warnings", diagnostics(report.getContainerWarnings(), true));
+    }
+
+    /** Failure wins over uncertainty; an unsigned clean container provides no proof of validity. */
+    static String validationVerdict(boolean containerErrors, boolean reportValid, List<String> indications) {
+        boolean failed = containerErrors;
+        boolean indeterminate = indications.isEmpty();
+        for (String indication : indications) {
+            if ("TOTAL_FAILED".equals(indication) || "FAILED".equals(indication)) failed = true;
+            else if (!"TOTAL_PASSED".equals(indication) && !"PASSED".equals(indication)) indeterminate = true;
+        }
+        return failed ? "INVALID" : indeterminate ? "INDETERMINATE" : reportValid ? "VALID" : "INVALID";
     }
 
     private Container open(String value) {
@@ -254,6 +280,7 @@ public final class ContainerService {
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                checkNameLength(entry.getName());
                 if (++entries > 10_000) throw tooLarge();
                 if (entry.getSize() > remaining) throw tooLarge();
                 remaining -= copyBounded(zip, OutputStream.nullOutputStream(), remaining, null);
@@ -279,6 +306,7 @@ public final class ContainerService {
                     }
                     if (event == XMLStreamConstants.START_ELEMENT && "DataFile".equals(reader.getLocalName())) {
                         String type = reader.getAttributeValue(null, "ContentType");
+                        checkNameLength(reader.getAttributeValue(null, "Filename"));
                         // The legacy facade strips path components: refuse them instead of exposing aliases.
                         try {
                             PathPolicy.fileName(reader.getAttributeValue(null, "Filename"));
@@ -325,6 +353,11 @@ public final class ContainerService {
     }
 
     private static ToolException tooLarge() { return new ToolException("SIZE_LIMIT", "Container or extracted data exceeds the configured byte limit."); }
+    private static void checkNameLength(String name) {
+        if (name != null && name.getBytes(StandardCharsets.UTF_8).length > MAX_NAME_BYTES) {
+            throw new ToolException("NAME_LIMIT", "Container entry names must not exceed 1024 UTF-8 bytes.");
+        }
+    }
     private static MessageDigest sha256() {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable"); }
@@ -338,9 +371,13 @@ public final class ContainerService {
         // embedded evidence level without downloading trust lists or asserting its validity.
         if (signature instanceof AsicSignature asic) {
             Element element = asic.getOrigin().getDssSignature().getSignatureElement();
-            var properties = element.getElementsByTagNameNS("http://uri.etsi.org/01903/v1.3.2#", "UnsignedSignatureProperties");
-            if (properties.getLength() > 0) {
-                Element unsigned = (Element) properties.item(0);
+            // Follow the outer signature's own property path; never descend into a CounterSignature.
+            for (var node = element.getFirstChild(); node != null; node = node.getNextSibling()) {
+                if (!(node instanceof Element object) || !"Object".equals(object.getLocalName())
+                        || !"http://www.w3.org/2000/09/xmldsig#".equals(object.getNamespaceURI())) continue;
+                Element unsigned = xadesChild(xadesChild(xadesChild(object, "QualifyingProperties"),
+                        "UnsignedProperties"), "UnsignedSignatureProperties");
+                if (unsigned == null) continue;
                 if (hasXades(unsigned, "ArchiveTimeStamp")) return "LTA";
                 if (hasXades(unsigned, "SignatureTimeStamp") && hasXades(unsigned, "CertificateValues")
                         && hasXades(unsigned, "RevocationValues")) return "LT";
@@ -350,8 +387,17 @@ public final class ContainerService {
     }
 
     private static boolean hasXades(Element element, String localName) {
-        return element.getElementsByTagNameNS("http://uri.etsi.org/01903/v1.3.2#", localName).getLength() > 0
-                || element.getElementsByTagNameNS("http://uri.etsi.org/01903/v1.4.1#", localName).getLength() > 0;
+        return xadesChild(element, localName) != null;
+    }
+
+    private static Element xadesChild(Element parent, String localName) {
+        if (parent == null) return null;
+        for (var node = parent.getFirstChild(); node != null; node = node.getNextSibling()) {
+            if (node instanceof Element child && localName.equals(child.getLocalName())
+                    && ("http://uri.etsi.org/01903/v1.3.2#".equals(child.getNamespaceURI())
+                    || "http://uri.etsi.org/01903/v1.4.1#".equals(child.getNamespaceURI()))) return child;
+        }
+        return null;
     }
 
     private static String profile(SignatureProfile value) {

@@ -62,8 +62,11 @@ class StdioSmokeIT {
             JsonNode listed = response(lines, 2).path("result").path("tools");
             assertEquals(4, listed.size());
             Set<String> names = new HashSet<>();
+            Map<String, Map<String, Object>> outputSchemas = new java.util.HashMap<>();
             for (JsonNode tool : listed) {
                 names.add(tool.path("name").asString());
+                outputSchemas.put(tool.path("name").asString(), JSON.convertValue(tool.path("outputSchema"),
+                        new tools.jackson.core.type.TypeReference<Map<String, Object>>() {}));
                 assertEquals("object", tool.path("inputSchema").path("type").asString());
                 assertEquals("string", tool.path("inputSchema").path("properties").path("path").path("type").asString());
             }
@@ -72,14 +75,18 @@ class StdioSmokeIT {
             send(input, call(3, "open_container", Map.of("path", fixture.toString())));
             JsonNode opened = response(lines, 3).path("result");
             assertFalse(opened.path("isError").asBoolean(false), opened.toString());
+            assertTrue(opened.hasNonNull("structuredContent"));
+            ToolsTest.assertConforms(outputSchemas.get("open_container"), opened.get("structuredContent"));
             assertEquals(1, structured(opened).path("signature_count").asInt());
             assertEquals("test.txt", structured(opened).path("data_files").get(0).path("name").asString());
 
             send(input, call(4, "open_container", Map.of("path", outside.toString())));
             JsonNode error = response(lines, 4).path("result");
             assertTrue(error.path("isError").asBoolean(), error.toString());
-            assertTrue(structured(error).path("error").path("code").isString());
-            assertTrue(structured(error).path("error").path("message").isString());
+            assertFalse(error.hasNonNull("structuredContent"), "Errors must not carry a success-schema-incompatible body");
+            JsonNode errorText = JSON.readTree(error.path("content").get(0).path("text").asString());
+            assertEquals("PATH_NOT_ALLOWED", errorText.path("error").path("code").asString());
+            assertFalse(errorText.path("error").path("message").asString().isBlank());
             assertFalse(error.toString().contains(outside.toString()), "Tool failures must not leak local paths");
             assertFalse(error.toString().contains("Exception"), "Tool failures must not return stack traces");
 

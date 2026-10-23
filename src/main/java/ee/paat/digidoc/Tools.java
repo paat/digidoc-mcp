@@ -76,7 +76,7 @@ public final class Tools {
                 case "validate_container" -> service.validateContainer(path);
                 default -> throw new IllegalArgumentException();
             };
-            return result(result, false);
+            return result(result);
         } catch (ToolException exception) {
             return error(exception.code(), exception.getMessage());
         } catch (IllegalArgumentException exception) {
@@ -96,18 +96,21 @@ public final class Tools {
 
     private McpSchema.CallToolResult error(String code, String message) {
         try {
-            return result(Map.of("error", Map.of("code", code, "message", message)), true);
+            // outputSchema describes successful results. Keep failures in text content so
+            // strict clients can still read the safe code/message without schema rejection.
+            return McpSchema.CallToolResult.builder().isError(true)
+                    .addTextContent(mapper.writeValueAsString(Map.of("error", Map.of("code", code, "message", message))))
+                    .build();
         } catch (IOException exception) {
             return McpSchema.CallToolResult.builder().isError(true)
-                    .structuredContent(Map.of("error", Map.of("code", "OPERATION_FAILED", "message", "Operation failed.")))
                     .addTextContent("{\"error\":{\"code\":\"OPERATION_FAILED\",\"message\":\"Operation failed.\"}}")
                     .build();
         }
     }
 
-    private McpSchema.CallToolResult result(Map<String, Object> value, boolean isError) throws IOException {
+    private McpSchema.CallToolResult result(Map<String, Object> value) throws IOException {
         return McpSchema.CallToolResult.builder().structuredContent(value)
-                .addTextContent(mapper.writeValueAsString(value)).isError(isError).build();
+                .addTextContent(mapper.writeValueAsString(value)).isError(false).build();
     }
 
     private static Map<String, Object> string() { return Map.of("type", "string"); }

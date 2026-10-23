@@ -2,6 +2,8 @@ package ee.paat.digidoc;
 
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.json.schema.jackson3.DefaultJsonSchemaValidator;
+import tools.jackson.databind.JsonNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -53,8 +55,7 @@ class ToolsTest {
         assertAll(
                 () -> {
                     assertSafeError(result);
-                    var error = (Map<?, ?>) ((Map<?, ?>) result.structuredContent()).get("error");
-                    assertEquals("INVALID_TARGET", error.get("code"));
+                    assertEquals("INVALID_TARGET", errorBody(result).path("code").asString());
                 },
                 () -> assertArrayEquals(before, digest.digest(Files.readAllBytes(source)),
                         "Extraction must preserve the source container's SHA-256"));
@@ -83,18 +84,51 @@ class ToolsTest {
         }
     }
 
+    @Test void everyToolReturnsTextOnlyErrorsWithVisibleCodeAndMessage() {
+        for (var specification : tools.specifications()) {
+            var result = tools.call(specification.tool().name(), Map.of());
+            assertSafeError(result);
+            assertEquals("INVALID_ARGUMENT", errorBody(result).path("code").asString());
+            assertEquals("Tool arguments do not match the required schema.", errorBody(result).path("message").asString());
+        }
+    }
+
+    @Test void successfulResultsConformToEveryDeclaredOutputSchema() {
+        Path unsigned = TestFixtures.unsigned(root, "unsigned.txt", new byte[] {1});
+        for (var specification : tools.specifications()) {
+            String name = specification.tool().name();
+            Map<String, Object> arguments = name.equals("extract_file")
+                    ? Map.of("path", fixture.toString(), "file_name", "test.txt", "output_dir", root.toString())
+                    : Map.of("path", (name.equals("validate_container") ? unsigned : fixture).toString());
+            var result = tools.call(name, arguments);
+            assertEquals(false, result.isError(), name + ": " + result);
+            assertNotNull(result.structuredContent(), name);
+            assertConforms(specification.tool().outputSchema(), result.structuredContent());
+        }
+    }
+
+    static void assertConforms(Map<String, Object> schema, Object value) {
+        var validation = new DefaultJsonSchemaValidator().validate(schema, value);
+        assertTrue(validation.valid(), validation.errorMessage());
+    }
+
+    private static JsonNode errorBody(McpSchema.CallToolResult result) {
+        var text = (McpSchema.TextContent) result.content().getFirst();
+        return JsonMapper.shared().readTree(text.text()).path("error");
+    }
+
     private static void assertSafeError(McpSchema.CallToolResult result) {
         assertEquals(true, result.isError());
-        var body = (Map<?, ?>) result.structuredContent();
-        var error = (Map<?, ?>) body.get("error");
-        assertEquals(Set.of("code", "message"), error.keySet());
-        String message = (String) error.get("message");
+        assertNull(result.structuredContent(), "Error bodies must not violate the success output schema");
+        assertEquals(1, result.content().size());
+        JsonNode error = errorBody(result);
+        assertEquals(Set.of("code", "message"), Set.copyOf(error.propertyNames()));
+        assertTrue(error.path("code").isString());
+        assertFalse(error.path("code").asString().isBlank());
+        String message = error.path("message").asString();
         assertFalse(message.isBlank());
         assertTrue(message.length() <= 512);
         assertFalse(message.contains("secret"));
         assertFalse(message.contains("Exception"));
-        var text = (McpSchema.TextContent) result.content().getFirst();
-        var json = JsonMapper.shared().readTree(text.text());
-        assertEquals(error.get("code"), json.path("error").path("code").asString());
     }
 }
