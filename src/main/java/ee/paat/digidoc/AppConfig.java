@@ -12,11 +12,19 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /** Immutable, validated startup configuration. */
-public record AppConfig(List<Path> roots, long maxBytes, Configuration.Mode mode, Path tslCache) {
+public record AppConfig(List<Path> roots, long maxBytes, Configuration.Mode mode, Path tslCache,
+                        long validationTimeoutSeconds) {
     public static final long DEFAULT_MAX_BYTES = 100L * 1024 * 1024;
 
+    public static final long DEFAULT_VALIDATION_TIMEOUT_SECONDS = 120;
+
+    public AppConfig(List<Path> roots, long maxBytes, Configuration.Mode mode, Path tslCache) {
+        this(roots, maxBytes, mode, tslCache, DEFAULT_VALIDATION_TIMEOUT_SECONDS);
+    }
+
     public AppConfig {
-        if (roots == null || roots.isEmpty() || maxBytes <= 0 || mode == null || tslCache == null) {
+        if (roots == null || roots.isEmpty() || maxBytes <= 0 || mode == null || tslCache == null
+                || validationTimeoutSeconds <= 0 || validationTimeoutSeconds > Long.MAX_VALUE / 1_000_000_000L) {
             throw new ToolException("INVALID_CONFIG", "Invalid server configuration.");
         }
         List<Path> canonical = new ArrayList<>();
@@ -52,7 +60,9 @@ public record AppConfig(List<Path> roots, long maxBytes, Configuration.Mode mode
             };
             Path cache = Path.of(env.getOrDefault("DIGIDOC_MCP_TSL_CACHE",
                     Path.of(System.getProperty("user.home"), ".cache", "digidoc-mcp", "tsl").toString()));
-            return new AppConfig(roots, maxBytes, mode, cache);
+            long timeout = Long.parseLong(env.getOrDefault("DIGIDOC_MCP_VALIDATION_TIMEOUT_SECONDS",
+                    Long.toString(DEFAULT_VALIDATION_TIMEOUT_SECONDS)));
+            return new AppConfig(roots, maxBytes, mode, cache, timeout);
         } catch (ToolException e) {
             throw e;
         } catch (RuntimeException e) {

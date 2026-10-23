@@ -61,8 +61,60 @@ class ValidationSummaryTest {
         assertEquals("INVALID", ContainerService.validationSummary(List.of(), report).get("result"));
     }
 
+    @Test void timestampWithoutIndicationUsesValidResult() {
+        assertEquals("VALID", timestampVerdict(null, true));
+    }
+
+    @Test void timestampWithoutIndicationUsesFailedResult() {
+        assertEquals("INVALID", timestampVerdict(null, false));
+    }
+
+    @Test void timestampWithoutIndicationOrResultIsIndeterminate() {
+        assertEquals("INDETERMINATE", timestampVerdict(null, null));
+    }
+
+    @Test void explicitTimestampIndicationTakesPrecedence() {
+        assertEquals("VALID", timestampVerdict(Indication.PASSED, false));
+        assertEquals("VALID", timestampVerdict(Indication.TOTAL_PASSED, null));
+        assertEquals("INVALID", timestampVerdict(Indication.FAILED, true));
+        assertEquals("INVALID", timestampVerdict(Indication.TOTAL_FAILED, null));
+        assertEquals("INDETERMINATE", timestampVerdict(Indication.INDETERMINATE, true));
+    }
+
+    @Test void failureDominatesMissingTimestampResultRegardlessOfOrder() {
+        for (var ids : List.of(List.of("missing", "failed"), List.of("failed", "missing"))) {
+            var report = timestampReport(Map.of(), Map.of("failed", false), ids);
+            assertEquals("INVALID", ContainerService.validationSummary(List.of(), report).get("result"));
+        }
+    }
+
+    @Test void timestampDoesNotOverrideExistingSignatureOrReportFailure() {
+        assertEquals("INVALID", ContainerService.validationVerdict(true, true, List.of("PASSED")));
+        assertEquals("INDETERMINATE", ContainerService.validationVerdict(false, true, List.of("INDETERMINATE", "PASSED")));
+        assertEquals("INVALID", ContainerService.validationVerdict(false, true, List.of("FAILED", "PASSED")));
+        assertEquals("INVALID", ContainerService.validationVerdict(false, false, List.of("PASSED")));
+    }
+
+    private static Object timestampVerdict(Indication indication, Boolean valid) {
+        var report = timestampReport(indication == null ? Map.of() : Map.of("timestamp", indication),
+                valid == null ? Map.of() : Map.of("timestamp", valid), List.of("timestamp"));
+        return ContainerService.validationSummary(List.of(), report).get("result");
+    }
+
+    private static Report timestampReport(Map<String, Indication> indications, Map<String, Boolean> results,
+                                          List<String> timestamps) {
+        return new Report(indications, List.of(), timestamps) {
+            @Override public ValidationResult getValidationResult(String id) {
+                return !results.containsKey(id) ? null : new AsicContainerValidationResult() {
+                    @Override public boolean isValid() { return results.get(id); }
+                };
+            }
+            @Override public boolean isValid() { return true; }
+        };
+    }
+
     /** Minimal offline report: only the report projection's inputs are overridden. */
-    private static final class Report extends AsicContainerValidationResult {
+    private static class Report extends AsicContainerValidationResult {
         private final Map<String, Indication> indications;
         private final List<String> signatures;
         private final List<String> timestamps;

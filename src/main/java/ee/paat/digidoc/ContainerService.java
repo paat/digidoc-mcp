@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -44,22 +43,38 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import javax.xml.stream.XMLInputFactory;
-import javax.xml.stream.XMLStreamConstants;
-import javax.xml.stream.XMLStreamException;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Read-only container operations; extraction is the sole document filesystem write. */
 public final class ContainerService {
-    // More generous than typical filesystem components, but bounds exact extraction keys and output.
-    private static final int MAX_NAME_BYTES = 1024;
     private final AppConfig config;
     private final PathPolicy paths;
     private final Configuration digiDoc;
     private final Configuration inspection;
+    private final Supplier<Map<String, Object>> validationOperation;
+    // One worker owns the online Configuration, including build(), TSL refresh and report access.
+    // A timed-out library call may ignore interruption: never replace it with another worker.
+    private final ThreadPoolExecutor validationExecutor = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(1), task -> {
+                Thread thread = new Thread(task, "digidoc-validation");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     public ContainerService(AppConfig config) {
+        this(config, null);
+    }
+
+    /** Offline test seam for validation that blocks or ignores interruption. */
+    ContainerService(AppConfig config, Supplier<Map<String, Object>> validationOperation) {
+        validationExecutor.allowCoreThreadTimeOut(true);
+        this.validationOperation = validationOperation;
         this.config = config;
         this.paths = new PathPolicy(config.roots());
         this.digiDoc = new BundledConfiguration(config.mode());
@@ -181,7 +196,33 @@ public final class ContainerService {
         });
     }
 
-    public synchronized Map<String, Object> validateContainer(String path) {
+    public Map<String, Object> validateContainer(String path) {
+        long started = System.nanoTime();
+        FutureTask<Map<String, Object>> task = new FutureTask<>(() -> validateNow(path));
+        try {
+            validationExecutor.execute(task);
+            long remaining = TimeUnit.SECONDS.toNanos(config.validationTimeoutSeconds()) - (System.nanoTime() - started);
+            return task.get(Math.max(0, remaining), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException | RejectedExecutionException e) {
+            throw validationTimeout();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw validationTimeout();
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof ToolException error) throw error;
+            throw new ToolException("CONTAINER_ERROR", "The container could not be processed.");
+        } finally {
+            task.cancel(true);
+            validationExecutor.remove(task);
+        }
+    }
+
+    private static ToolException validationTimeout() {
+        return new ToolException("VALIDATION_TIMEOUT", "Validation exceeded its deadline.");
+    }
+
+    private Map<String, Object> validateNow(String path) {
+        if (validationOperation != null) return safely(validationOperation);
         return safely(() -> {
             Container container = open(path, digiDoc);
             ContainerValidationResult report = container.validate();
@@ -223,7 +264,12 @@ public final class ContainerService {
         }
         // Timestamp-only ASiC-S containers must also contribute their cryptographic result.
         for (String id : report.getTimestampIdList()) {
-            indications.add(name(report.getIndication(id)));
+            String indication = name(report.getIndication(id));
+            if (indication == null) {
+                ValidationResult result = report.getValidationResult(id);
+                indication = result == null ? "INDETERMINATE" : result.isValid() ? "PASSED" : "FAILED";
+            }
+            indications.add(indication);
         }
         return object("result", validationVerdict(!report.getContainerErrors().isEmpty(), report.isValid(), indications),
                 "signatures", signatures, "errors", diagnostics(report.getContainerErrors(), false),
@@ -271,65 +317,7 @@ public final class ContainerService {
     }
 
     private void preflightZip(byte[] bytes) throws IOException {
-        if (bytes.length < 4 || bytes[0] != 'P' || bytes[1] != 'K') {
-            preflightLegacyXml(bytes);
-            return;
-        }
-        long remaining = config.maxBytes();
-        int entries = 0;
-        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                checkNameLength(entry.getName());
-                if (++entries > 10_000) throw tooLarge();
-                if (entry.getSize() > remaining) throw tooLarge();
-                remaining -= copyBounded(zip, OutputStream.nullOutputStream(), remaining, null);
-                zip.closeEntry();
-            }
-        }
-    }
-
-    /** DDOC's legacy reader can resolve body-less data files from disk; accept embedded bodies only. */
-    private static void preflightLegacyXml(byte[] bytes) {
-        XMLInputFactory factory = XMLInputFactory.newFactory();
-        factory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
-        factory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
-        boolean inDataFile = false;
-        boolean hasBody = false;
-        try {
-            var reader = factory.createXMLStreamReader(new ByteArrayInputStream(bytes));
-            try {
-                while (reader.hasNext()) {
-                    int event = reader.next();
-                    if (event == XMLStreamConstants.DTD || event == XMLStreamConstants.ENTITY_REFERENCE) {
-                        throw new ToolException("UNSUPPORTED_CONTAINER", "External XML declarations are not supported.");
-                    }
-                    if (event == XMLStreamConstants.START_ELEMENT && "DataFile".equals(reader.getLocalName())) {
-                        String type = reader.getAttributeValue(null, "ContentType");
-                        checkNameLength(reader.getAttributeValue(null, "Filename"));
-                        // The legacy facade strips path components: refuse them instead of exposing aliases.
-                        try {
-                            PathPolicy.fileName(reader.getAttributeValue(null, "Filename"));
-                        } catch (ToolException e) {
-                            throw new ToolException("UNSUPPORTED_CONTAINER", "DDOC data file names must be safe single file names.");
-                        }
-                        if (inDataFile || !("EMBEDDED_BASE64".equals(type) || "EMBEDDED".equals(type))) {
-                            throw new ToolException("UNSUPPORTED_CONTAINER", "Only embedded DDOC data files are supported.");
-                        }
-                        inDataFile = true;
-                        hasBody = false;
-                    } else if (inDataFile && (event == XMLStreamConstants.CHARACTERS || event == XMLStreamConstants.CDATA)
-                            && !reader.isWhiteSpace()) {
-                        hasBody = true;
-                    } else if (event == XMLStreamConstants.END_ELEMENT && "DataFile".equals(reader.getLocalName())) {
-                        if (!hasBody) throw new ToolException("UNSUPPORTED_CONTAINER", "Empty or external DDOC data files are not supported.");
-                        inDataFile = false;
-                    }
-                }
-            } finally { reader.close(); }
-        } catch (XMLStreamException e) {
-            throw new ToolException("CONTAINER_ERROR", "The container could not be processed.");
-        }
+        ContainerPreflight.check(bytes, config.maxBytes());
     }
 
     static long copyBounded(InputStream input, OutputStream output, long limit, MessageDigest digest) throws IOException {
@@ -353,11 +341,6 @@ public final class ContainerService {
     }
 
     private static ToolException tooLarge() { return new ToolException("SIZE_LIMIT", "Container or extracted data exceeds the configured byte limit."); }
-    private static void checkNameLength(String name) {
-        if (name != null && name.getBytes(StandardCharsets.UTF_8).length > MAX_NAME_BYTES) {
-            throw new ToolException("NAME_LIMIT", "Container entry names must not exceed 1024 UTF-8 bytes.");
-        }
-    }
     private static MessageDigest sha256() {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable"); }

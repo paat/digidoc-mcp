@@ -56,7 +56,7 @@ public final class Tools {
                 (exchange, request) -> call(name, request.arguments()));
     }
 
-    public synchronized McpSchema.CallToolResult call(String name, Map<String, Object> arguments) {
+    public McpSchema.CallToolResult call(String name, Map<String, Object> arguments) {
         try {
             if (arguments == null) throw new IllegalArgumentException();
             Set<String> allowed = name.equals("extract_file")
