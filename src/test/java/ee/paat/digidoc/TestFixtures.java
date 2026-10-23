@@ -31,6 +31,19 @@ final class TestFixtures {
         return destination;
     }
 
+    static Path copyComposite(Path root) throws IOException {
+        return copyComposite(root, "composite-asics.asics");
+    }
+
+    static Path copyComposite(Path root, String name) throws IOException {
+        Path destination = root.resolve(name);
+        try (var input = TestFixtures.class.getResourceAsStream("/fixtures/" + name)) {
+            if (input == null) throw new IOException("Missing composite fixture");
+            Files.copy(input, destination);
+        }
+        return destination;
+    }
+
     static ContainerService service(Path root) {
         return service(root, 100L * 1024 * 1024);
     }

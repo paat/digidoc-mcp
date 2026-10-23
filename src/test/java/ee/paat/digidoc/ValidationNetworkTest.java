@@ -1,5 +1,7 @@
 package ee.paat.digidoc;
 
+import org.digidoc4j.Configuration;
+import org.digidoc4j.ContainerBuilder;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -39,5 +41,34 @@ class ValidationNetworkTest {
         var signatures = ContainerServiceTest.rows(result.get("signatures"));
         assertEquals(1, signatures.size());
         assertEquals("HASH_FAILURE", signatures.getFirst().get("sub_indication"), result.toString());
+    }
+
+    @Test void timestampedCompositeReportsNestedSignatureValidation() throws Exception {
+        Path fixture = TestFixtures.copyComposite(root);
+        var result = TestFixtures.service(root).validateContainer(fixture.toString());
+        var signatures = ContainerServiceTest.rows(result.get("signatures"));
+        assertEquals(1, signatures.size(), result.toString());
+        assertEquals("TOTAL_PASSED", signatures.getFirst().get("indication"), result.toString());
+        assertNotNull(signatures.getFirst().get("signer"));
+        assertEquals("LT", signatures.getFirst().get("profile"));
+        assertEquals("VALID", result.get("result"), result.toString());
+    }
+
+    @Test void timestampedBasicCompositePreservesInnerIndeterminateVerdict() throws Exception {
+        Path fixture = TestFixtures.copyComposite(root, "composite-b-bes.asics");
+        Configuration configuration = new Configuration(Configuration.Mode.TEST);
+        configuration.setConnectionTimeout(15_000);
+        configuration.setSocketTimeout(30_000);
+        var report = ContainerBuilder.aContainer().withConfiguration(configuration)
+                .fromExistingFile(fixture.toString()).build().validate();
+        assertEquals(1, report.getSignatureIdList().size());
+        String id = report.getSignatureIdList().getFirst();
+        assertEquals("INDETERMINATE", report.getIndication(id).name());
+        var result = TestFixtures.service(root).validateContainer(fixture.toString());
+        var signatures = ContainerServiceTest.rows(result.get("signatures"));
+        assertEquals(1, signatures.size(), result.toString());
+        assertEquals(report.getIndication(id).name(), signatures.getFirst().get("indication"));
+        assertEquals(report.getSubIndication(id).name(), signatures.getFirst().get("sub_indication"));
+        assertEquals("INDETERMINATE", result.get("result"), result.toString());
     }
 }
