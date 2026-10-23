@@ -134,13 +134,17 @@ public final class ContainerService {
         return safely(() -> {
             PathPolicy.fileName(fileName);
             Path directory = paths.existing(outputDir, true);
-            Container container = open(path);
+            Path source = paths.existing(path, false);
+            Container container = open(source.toString());
             List<DataFile> matches = container.getDataFiles().stream().filter(f -> fileName.equals(dataName(f))).toList();
             if (matches.isEmpty()) throw new ToolException("FILE_NOT_FOUND", "No data file has the requested name.");
             if (matches.size() != 1) throw new ToolException("AMBIGUOUS_FILE_NAME", "The container contains duplicate data file names.");
             DataFile file = matches.getFirst();
             try (SecureDirectoryStream<Path> secure = PathPolicy.openDirectory(directory)) {
                 Path target = Path.of(fileName);
+                if (overwrite && directory.resolve(target).equals(source)) {
+                    throw new ToolException("INVALID_TARGET", "Extraction target must not be the source container.");
+                }
                 BasicFileAttributes existing = attributes(secure, target);
                 if (existing != null && (existing.isSymbolicLink() || !existing.isRegularFile())) {
                     throw new ToolException("INVALID_TARGET", "Extraction target must be a regular file, never a symbolic link.");

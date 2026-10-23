@@ -8,6 +8,8 @@ import org.junit.jupiter.api.io.TempDir;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +40,24 @@ class ToolsTest {
         assertSafeError(tools.call("extract_file", Map.of("path", fixture.toString(), "file_name", "test.txt",
                 "output_dir", root.toString(), "overwrite", "true")));
         assertFalse(java.nio.file.Files.exists(root.resolve("test.txt")));
+    }
+
+    @Test void extractionCannotOverwriteItsSourceContainer() throws Exception {
+        Path source = TestFixtures.unsigned(root, "unsigned.asice", new byte[] {1, 2, 3});
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] before = digest.digest(Files.readAllBytes(source));
+
+        var result = tools.call("extract_file", Map.of("path", source.toString(),
+                "file_name", "unsigned.asice", "output_dir", root.toString(), "overwrite", true));
+
+        assertAll(
+                () -> {
+                    assertSafeError(result);
+                    var error = (Map<?, ?>) ((Map<?, ?>) result.structuredContent()).get("error");
+                    assertEquals("INVALID_TARGET", error.get("code"));
+                },
+                () -> assertArrayEquals(before, digest.digest(Files.readAllBytes(source)),
+                        "Extraction must preserve the source container's SHA-256"));
     }
 
     @Test void malformedPathIsToolErrorAndServerCanContinue() {
