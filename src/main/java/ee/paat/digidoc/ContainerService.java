@@ -338,9 +338,13 @@ public final class ContainerService {
         // embedded evidence level without downloading trust lists or asserting its validity.
         if (signature instanceof AsicSignature asic) {
             Element element = asic.getOrigin().getDssSignature().getSignatureElement();
-            var properties = element.getElementsByTagNameNS("http://uri.etsi.org/01903/v1.3.2#", "UnsignedSignatureProperties");
-            if (properties.getLength() > 0) {
-                Element unsigned = (Element) properties.item(0);
+            // Follow the outer signature's own property path; never descend into a CounterSignature.
+            for (var node = element.getFirstChild(); node != null; node = node.getNextSibling()) {
+                if (!(node instanceof Element object) || !"Object".equals(object.getLocalName())
+                        || !"http://www.w3.org/2000/09/xmldsig#".equals(object.getNamespaceURI())) continue;
+                Element unsigned = xadesChild(xadesChild(xadesChild(object, "QualifyingProperties"),
+                        "UnsignedProperties"), "UnsignedSignatureProperties");
+                if (unsigned == null) continue;
                 if (hasXades(unsigned, "ArchiveTimeStamp")) return "LTA";
                 if (hasXades(unsigned, "SignatureTimeStamp") && hasXades(unsigned, "CertificateValues")
                         && hasXades(unsigned, "RevocationValues")) return "LT";
@@ -350,8 +354,17 @@ public final class ContainerService {
     }
 
     private static boolean hasXades(Element element, String localName) {
-        return element.getElementsByTagNameNS("http://uri.etsi.org/01903/v1.3.2#", localName).getLength() > 0
-                || element.getElementsByTagNameNS("http://uri.etsi.org/01903/v1.4.1#", localName).getLength() > 0;
+        return xadesChild(element, localName) != null;
+    }
+
+    private static Element xadesChild(Element parent, String localName) {
+        if (parent == null) return null;
+        for (var node = parent.getFirstChild(); node != null; node = node.getNextSibling()) {
+            if (node instanceof Element child && localName.equals(child.getLocalName())
+                    && ("http://uri.etsi.org/01903/v1.3.2#".equals(child.getNamespaceURI())
+                    || "http://uri.etsi.org/01903/v1.4.1#".equals(child.getNamespaceURI()))) return child;
+        }
+        return null;
     }
 
     private static String profile(SignatureProfile value) {
