@@ -15,7 +15,7 @@ Unofficial read-only MCP server (Java 21, stdio) for inspecting and validating E
 - Stdout carries only MCP JSON-RPC lines; logs go to stderr. Never print to stdout.
 - Every `path` and `output_dir` must resolve with `toRealPath()` inside `DIGIDOC_MCP_ROOTS`; extraction names must match a container data file exactly and may not contain separators, `..` or NUL. Do not loosen `PathPolicy`.
 - Container preflight (ZIP central directory vs local entries, inflated-byte budget, nested limits, DDOC/DTD refusals) runs before DigiDoc4j parses anything; keep it ahead of any parse and fail closed on ambiguous layouts.
-- Inspection (open, list, extract) uses an empty trust source and makes no network calls; only validation loads trust lists. Validation runs on one dedicated worker with a deadline (`VALIDATION_TIMEOUT`).
+- Inspection (open, list, extract) uses an empty trust source and makes no network calls; only validation loads trust lists. Validation runs on one dedicated worker with a deadline (`DIGIDOC_MCP_VALIDATION_TIMEOUT_SECONDS`, default 120; error `VALIDATION_TIMEOUT`).
 - Container metadata is untrusted: diagnostics use generic messages, extracted content is never returned inline.
 - Dependency versions are pinned in `pom.xml` (DigiDoc4j, MCP SDK); use stable releases only and record the date and source when bumping.
 - Tests use test-signed fixtures in TEST mode; never commit real signed personal documents.
