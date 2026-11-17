@@ -4,6 +4,7 @@ import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,26 +14,49 @@ import java.util.Set;
 public final class Tools {
     private final ContainerService service;
     private final McpJsonMapper mapper;
+    private final SmartIdSigning signing;
 
     public Tools(ContainerService service, McpJsonMapper mapper) {
+        this(service, mapper, null);
+    }
+
+    public Tools(ContainerService service, McpJsonMapper mapper, SmartIdSigning signing) {
         this.service = service;
         this.mapper = mapper;
+        this.signing = signing;
     }
 
     public List<McpServerFeatures.SyncToolSpecification> specifications() {
-        return List.of(
-                specification("open_container", "Inspect a DigiDoc container's type, data files and signature count.",
-                        object(Map.of("type", string(), "data_files", array(object(Map.of(
-                                "name", string(), "mime_type", nullableString(), "size_bytes", Map.of("type", "integer")))) ,
-                                "signature_count", Map.of("type", "integer")))),
-                specification("list_signatures", "List signer certificate and signature metadata; does not validate trust.",
-                        object(Map.of("signatures", array(object(nullableFields("id", "signer_common_name",
-                                "personal_identification_code", "claimed_signing_time", "trusted_signing_time",
-                                "profile", "signature_method", "certificate_issuer")))))),
-                specification("extract_file", "Extract one exact data file name into an existing allowed directory, returning its path and SHA-256.",
-                        object(Map.of("path", string(), "sha256", string()))),
-                specification("validate_container", "Validate signatures using DigiDoc trust lists; may download trust and certificate status information.",
-                        validationSchema()));
+        var tools = new ArrayList<McpServerFeatures.SyncToolSpecification>();
+        tools.add(specification("open_container", "Inspect a DigiDoc container's type, data files and signature count.",
+                object(Map.of("type", string(), "data_files", array(object(Map.of(
+                        "name", string(), "mime_type", nullableString(), "size_bytes", Map.of("type", "integer")))) ,
+                        "signature_count", Map.of("type", "integer")))));
+        tools.add(specification("list_signatures", "List signer certificate and signature metadata; does not validate trust.",
+                object(Map.of("signatures", array(object(nullableFields("id", "signer_common_name",
+                        "personal_identification_code", "claimed_signing_time", "trusted_signing_time",
+                        "profile", "signature_method", "certificate_issuer")))))));
+        tools.add(specification("extract_file", "Extract one exact data file name into an existing allowed directory, returning its path and SHA-256.",
+                object(Map.of("path", string(), "sha256", string()))));
+        tools.add(specification("validate_container", "Validate signatures using DigiDoc trust lists; may download trust and certificate status information.",
+                validationSchema()));
+        if (signing != null) tools.add(signingSpecification());
+        return List.copyOf(tools);
+    }
+
+    private McpServerFeatures.SyncToolSpecification signingSpecification() {
+        var properties = new LinkedHashMap<String, Object>();
+        properties.put("path", Map.of("type", "string", "minLength", 1));
+        var schema = Map.<String, Object>of("type", "object", "properties", properties,
+                "required", List.of("path"), "additionalProperties", false);
+        var tool = McpSchema.Tool.builder("sign_with_smartid", schema)
+                .description("Sign one file with Smart-ID through the installed DigiDoc4. Creates a new .asice beside it. PIN2 on the phone is the consent.")
+                .outputSchema(signingOutputSchema())
+                .annotations(McpSchema.ToolAnnotations.builder().readOnlyHint(false)
+                        .destructiveHint(true).idempotentHint(false).openWorldHint(true).build())
+                .build();
+        return new McpServerFeatures.SyncToolSpecification(tool,
+                (exchange, request) -> call("sign_with_smartid", request.arguments()));
     }
 
     private McpServerFeatures.SyncToolSpecification specification(String name, String description,
@@ -58,9 +82,15 @@ public final class Tools {
 
     public McpSchema.CallToolResult call(String name, Map<String, Object> arguments) {
         try {
+            if ("sign_with_smartid".equals(name) && signing == null) {
+                throw new ToolException("SIGNING_DISABLED", "Smart-ID signing is not enabled.");
+            }
             if (arguments == null) throw new IllegalArgumentException();
-            Set<String> allowed = name.equals("extract_file")
-                    ? Set.of("path", "file_name", "output_dir", "overwrite") : Set.of("path");
+            Set<String> allowed = switch (name) {
+                case "extract_file" -> Set.of("path", "file_name", "output_dir", "overwrite");
+                case "open_container", "list_signatures", "validate_container", "sign_with_smartid" -> Set.of("path");
+                default -> throw new IllegalArgumentException();
+            };
             if (!allowed.containsAll(arguments.keySet())) throw new IllegalArgumentException();
             var path = requiredString(arguments, "path");
             Map<String, Object> result = switch (name) {
@@ -74,6 +104,7 @@ public final class Tools {
                             requiredString(arguments, "output_dir"), Boolean.TRUE.equals(arguments.get("overwrite")));
                 }
                 case "validate_container" -> service.validateContainer(path);
+                case "sign_with_smartid" -> signing.sign(path);
                 default -> throw new IllegalArgumentException();
             };
             return result(result);
@@ -125,6 +156,16 @@ public final class Tools {
         for (String field : fields) properties.put(field, nullableString());
         return properties;
     }
+    private static Map<String, Object> signingOutputSchema() {
+        var properties = new LinkedHashMap<String, Object>();
+        properties.put("path", string());
+        properties.put("sha256", string());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> validationFields = (Map<String, Object>) validationSchema().get("properties");
+        properties.putAll(validationFields);
+        return object(properties);
+    }
+
     private static Map<String, Object> validationSchema() {
         var diagnostics = array(object(Map.of("code", string(), "message", string())));
         var signature = nullableFields("id", "indication", "sub_indication", "signer", "signing_time", "profile");

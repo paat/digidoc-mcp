@@ -16,12 +16,15 @@ public final class Main {
         System.setOut(System.err);
         try {
             var mapper = new JacksonMcpJsonMapper(JsonMapper.shared());
-            var service = new ContainerService(AppConfig.fromEnvironment());
+            var config = AppConfig.fromEnvironment();
+            var service = new ContainerService(config);
+            SmartIdSigning signing = config.signing() == null ? null
+                    : new SmartIdSigning(config, service, new WindowsSmartIdDriver());
             var transport = new StdioServerTransportProvider(mapper, System.in, protocolOutput);
             var server = McpServer.sync(transport)
                     .serverInfo("digidoc-mcp", "0.1.0")
                     .capabilities(McpSchema.ServerCapabilities.builder().tools(false).build())
-                    .tools(new Tools(service, mapper).specifications())
+                    .tools(new Tools(service, mapper, signing).specifications())
                     .build();
             Runtime.getRuntime().addShutdownHook(new Thread(server::close, "digidoc-shutdown"));
             // The SDK owns the input/output threads and terminates them on stdin EOF.
