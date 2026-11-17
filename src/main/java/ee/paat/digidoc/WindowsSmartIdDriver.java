@@ -63,7 +63,7 @@ final class WindowsSmartIdDriver implements SigningDriver {
         }
     }
 
-    /** Refuse when any visible process command ends with {@code qdigidoc4.exe}, ignoring case. */
+    /** Refuse when a process executable's file name is {@code qdigidoc4.exe}, ignoring case. */
     static void refuseIfDigidoc4Running() {
         refuseIfDigidoc4Running(ProcessHandle.allProcesses().flatMap(WindowsSmartIdDriver::commandOf));
     }
@@ -74,10 +74,11 @@ final class WindowsSmartIdDriver implements SigningDriver {
         }
     }
 
+    /** The executable file name, the last segment after {@code \} or {@code /}, is {@code qdigidoc4.exe}. */
     static boolean qdigidoc4Command(String command) {
-        String suffix = "qdigidoc4.exe";
-        return command != null && command.length() >= suffix.length()
-                && command.regionMatches(true, command.length() - suffix.length(), suffix, 0, suffix.length());
+        if (command == null) return false;
+        int separator = Math.max(command.lastIndexOf('\\'), command.lastIndexOf('/'));
+        return command.substring(separator + 1).equalsIgnoreCase("qdigidoc4.exe");
     }
 
     /**

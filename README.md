@@ -85,7 +85,7 @@ For example, `open_container` returns a payload shaped like:
 
 Signing is off unless `DIGIDOC_MCP_SIGNING=smartid`. The server then advertises `sign_with_smartid`, which takes `{"path": "<file inside an allowed root>"}` and no other arguments. It signs that one file by driving the person's installed [DigiDoc4](https://github.com/open-eid/DigiDoc4-Client) and RIA Smart-ID, the same way as signing by hand. DigiDoc4 must be installed on the Windows PC where this server runs. The server does not call Smart-ID itself and does not see the PIN. **PIN2 in the Smart-ID app is the user's consent.** Enabling signing on any other operating system fails startup with `INVALID_CONFIG`. One signature runs at a time.
 
-Before it writes settings or starts DigiDoc4, the server returns `DIGIDOC4_RUNNING` when any process command already ends with `qdigidoc4.exe` (case-insensitive). Otherwise, before launch, the server writes `HKCU\Software\RIA\qdigidoc4` (DigiDoc4's `QSettings` organization `RIA`, application `qdigidoc4`):
+Before it writes settings or starts DigiDoc4, the server returns `DIGIDOC4_RUNNING` when a process executable's file name is `qdigidoc4.exe` (case-insensitive). Otherwise, before launch, the server writes `HKCU\Software\RIA\qdigidoc4` (DigiDoc4's `QSettings` organization `RIA`, application `qdigidoc4`):
 
 | Name | Value |
 | --- | --- |
@@ -104,7 +104,7 @@ The tool waits until the `.asice` exists, its size and modification time stay un
 | `SIGNING_DISABLED` | The tool was called while signing is off. |
 | `TARGET_EXISTS` | The `.asice` path already exists. Nothing is overwritten. |
 | `DIGIDOC4_NOT_FOUND` | `qdigidoc4.exe` is missing. An explicit `DIGIDOC_MCP_DIGIDOC4` path is not replaced with the default location. |
-| `DIGIDOC4_RUNNING` | A process whose command ends with `qdigidoc4.exe` is already running. Close DigiDoc4 and try again. |
+| `DIGIDOC4_RUNNING` | A process whose executable file name is `qdigidoc4.exe` (any case) is already running. Close DigiDoc4 and try again. |
 | `UI_AUTOMATION_FAILED` | The UI script could not find a control, it exited non-zero, or the launched DigiDoc4 process exited early. |
 | `SIGN_TIMEOUT` | The container did not finish before the deadline. An `.asice` created during that call is deleted only when its snapshot was read and parsed and lists zero signatures. A read or parse failure keeps the file. A signed container is kept. |
 | `SIGNATURE_NOT_VALID` | The container finished but is not `VALID`, or no signature matches the configured code. The file is left in place. |

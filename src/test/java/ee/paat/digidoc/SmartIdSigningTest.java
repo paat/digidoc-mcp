@@ -567,7 +567,10 @@ class SmartIdSigningTest {
     @Test void digidoc4CommandRefusesRunningExecutableAndUiCommandCarriesItsPid() throws Exception {
         assertTrue(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\qdigidoc4.exe"));
         assertTrue(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\QDIGIDOC4.EXE"));
+        assertTrue(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\QDigiDoc4.exe"));
         assertTrue(WindowsSmartIdDriver.qdigidoc4Command("/tmp/qdigidoc4.exe"));
+        assertFalse(WindowsSmartIdDriver.qdigidoc4Command("notqdigidoc4.exe"));
+        assertFalse(WindowsSmartIdDriver.qdigidoc4Command("C:\\tools\\notqdigidoc4.exe"));
         assertFalse(WindowsSmartIdDriver.qdigidoc4Command("/usr/bin/java"));
         assertFalse(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\qdigidoc4"));
         assertFalse(WindowsSmartIdDriver.qdigidoc4Command("C:\\tools\\qdigidoc4.exe.bak"));
