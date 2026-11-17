@@ -83,6 +83,21 @@ class SmartIdSigningTest {
         assertFalse(Files.exists(temporary.resolve("outside.asice")));
     }
 
+    @Test void signingReadsAByteSnapshotThatMatchesPathListing() throws Exception {
+        Path root = directory("allowed");
+        Path fixture = TestFixtures.copyValid(root);
+        byte[] bytes = Files.readAllBytes(fixture);
+        ContainerService service = TestFixtures.service(root);
+        assertEquals(service.listSignatures(fixture.toString()), service.listSignatures(bytes));
+        Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        Map<String, Object> result = signing(root, FIXTURE_CODE, executable(), (exe, file, code) -> {
+            try { Files.copy(fixture, SmartIdSigning.containerTarget(file)); }
+            catch (Exception e) { throw new IllegalStateException(e); }
+        }, new ManualClock(), Map.of(), summary("VALID"), 30).sign(source.toString());
+        assertEquals("VALID", result.get("result"));
+        assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)), result.get("sha256"));
+    }
+
     @Test void validFixtureMatchesConfiguredCodeAndReportsValidationSummary() throws Exception {
         Path root = directory("allowed");
         Path fixture = TestFixtures.copyValid(root);

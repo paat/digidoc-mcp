@@ -1,7 +1,9 @@
 package ee.paat.digidoc;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.Channels;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -137,9 +139,16 @@ final class SmartIdSigning {
         while (clock.nanoTime() < deadline) {
             Snapshot current = snapshot(target);
             if (current != null) appeared = true;
-            if (current != null && previous != null && current.equals(previous) && current.size > 0
-                    && hasSignatures(target)) {
-                return finish(target);
+            if (current != null && previous != null && current.equals(previous) && current.size > 0) {
+                Path real = null;
+                byte[] bytes = null;
+                try {
+                    real = realInside(target);
+                    bytes = readSnapshot(real);
+                } catch (ToolException e) {
+                    bytes = null;
+                }
+                if (bytes != null && hasSignatures(bytes)) return finish(real, bytes);
             }
             previous = current;
             clock.sleep(pollMillis);
@@ -161,15 +170,14 @@ final class SmartIdSigning {
         return discovered;
     }
 
-    private Map<String, Object> finish(Path target) {
-        Path real = realInside(target);
-        Map<String, Object> validation = containers.validateContainer(real.toString());
-        if (!"VALID".equals(validation.get("result")) || !codeMatches(real)) {
+    private Map<String, Object> finish(Path real, byte[] bytes) {
+        Map<String, Object> validation = containers.validateContainer(bytes);
+        if (!"VALID".equals(validation.get("result")) || !codeMatches(bytes)) {
             throw new ToolException("SIGNATURE_NOT_VALID", "The new signature is not valid for the configured signer.");
         }
         var result = new LinkedHashMap<String, Object>();
         result.put("path", real.toString());
-        result.put("sha256", sha256(real));
+        result.put("sha256", sha256(bytes));
         result.put("result", validation.get("result"));
         result.put("signatures", validation.get("signatures"));
         result.put("errors", validation.get("errors"));
@@ -177,8 +185,8 @@ final class SmartIdSigning {
         return result;
     }
 
-    private boolean codeMatches(Path target) {
-        Object listed = containers.listSignatures(target.toString()).get("signatures");
+    private boolean codeMatches(byte[] bytes) {
+        Object listed = containers.listSignatures(bytes).get("signatures");
         if (!(listed instanceof List<?> signatures)) return false;
         for (Object row : signatures) {
             if (row instanceof Map<?, ?> signature && personalCode.equals(signature.get("personal_identification_code"))) {
@@ -188,12 +196,27 @@ final class SmartIdSigning {
         return false;
     }
 
-    private boolean hasSignatures(Path target) {
+    private boolean hasSignatures(byte[] bytes) {
         try {
-            Object listed = containers.listSignatures(target.toString()).get("signatures");
+            Object listed = containers.listSignatures(bytes).get("signatures");
             return listed instanceof List<?> signatures && !signatures.isEmpty();
         } catch (ToolException e) {
             return false;
+        }
+    }
+
+    /** One bounded NOFOLLOW snapshot of the confined target. Callers must already have passed {@link #realInside}. */
+    private byte[] readSnapshot(Path real) {
+        try (var channel = Files.newByteChannel(real, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+             InputStream input = Channels.newInputStream(channel);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            if (channel.size() > config.maxBytes()) {
+                throw new ToolException("SIZE_LIMIT", "Container or extracted data exceeds the configured byte limit.");
+            }
+            ContainerService.copyBounded(input, output, config.maxBytes(), null);
+            return output.toByteArray();
+        } catch (IOException e) {
+            throw new ToolException("CONTAINER_UNAVAILABLE", "Signed container could not be read.");
         }
     }
 
@@ -233,16 +256,9 @@ final class SmartIdSigning {
         }
     }
 
-    private static String sha256(Path target) {
+    private static String sha256(byte[] bytes) {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (InputStream input = Files.newInputStream(target, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
-                byte[] buffer = new byte[8192];
-                for (int count; (count = input.read(buffer)) != -1; ) digest.update(buffer, 0, count);
-            }
-            return HexFormat.of().formatHex(digest.digest());
-        } catch (IOException e) {
-            throw new ToolException("CONTAINER_UNAVAILABLE", "Signed container could not be read.");
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable");
         }

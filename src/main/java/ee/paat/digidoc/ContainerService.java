@@ -131,21 +131,28 @@ public final class ContainerService {
     }
 
     public synchronized Map<String, Object> listSignatures(String path) {
-        return safely(() -> {
-            List<Map<String, Object>> signatures = new ArrayList<>();
-            for (Signature signature : containerSignatures(open(path))) {
-                X509Cert cert = signature.getSigningCertificate();
-                signatures.add(object("id", bounded(signature.getId()),
-                        "signer_common_name", subject(cert, X509Cert.SubjectName.CN),
-                        "personal_identification_code", subject(cert, X509Cert.SubjectName.SERIALNUMBER),
-                        "claimed_signing_time", instant(signature.getClaimedSigningTime()),
-                        "trusted_signing_time", instant(signature.getTrustedSigningTime()),
-                        "profile", inspectionProfile(signature),
-                        "signature_method", bounded(signature.getSignatureMethod()),
-                        "certificate_issuer", cert == null ? null : bounded(cert.getX509Certificate().getIssuerX500Principal().getName())));
-            }
-            return object("signatures", signatures);
-        });
+        return safely(() -> listedSignatures(open(path)));
+    }
+
+    /** Same inspection parse as {@link #listSignatures(String)}, over an already bounded snapshot. */
+    synchronized Map<String, Object> listSignatures(byte[] bytes) {
+        return safely(() -> listedSignatures(parseOrUnavailable(bytes, inspection)));
+    }
+
+    private Map<String, Object> listedSignatures(Container container) {
+        List<Map<String, Object>> signatures = new ArrayList<>();
+        for (Signature signature : containerSignatures(container)) {
+            X509Cert cert = signature.getSigningCertificate();
+            signatures.add(object("id", bounded(signature.getId()),
+                    "signer_common_name", subject(cert, X509Cert.SubjectName.CN),
+                    "personal_identification_code", subject(cert, X509Cert.SubjectName.SERIALNUMBER),
+                    "claimed_signing_time", instant(signature.getClaimedSigningTime()),
+                    "trusted_signing_time", instant(signature.getTrustedSigningTime()),
+                    "profile", inspectionProfile(signature),
+                    "signature_method", bounded(signature.getSignatureMethod()),
+                    "certificate_issuer", cert == null ? null : bounded(cert.getX509Certificate().getIssuerX500Principal().getName())));
+        }
+        return object("signatures", signatures);
     }
 
     public synchronized Map<String, Object> extractFile(String path, String fileName, String outputDir, boolean overwrite) {
@@ -197,8 +204,17 @@ public final class ContainerService {
     }
 
     public Map<String, Object> validateContainer(String path) {
+        return validateOnWorker(() -> validateNow(path));
+    }
+
+    /** Same validation worker and deadline as {@link #validateContainer(String)}, over an already bounded snapshot. */
+    Map<String, Object> validateContainer(byte[] bytes) {
+        return validateOnWorker(() -> validateNow(bytes));
+    }
+
+    private Map<String, Object> validateOnWorker(Supplier<Map<String, Object>> operation) {
         long started = System.nanoTime();
-        FutureTask<Map<String, Object>> task = new FutureTask<>(() -> validateNow(path));
+        FutureTask<Map<String, Object>> task = new FutureTask<>(operation::get);
         try {
             validationExecutor.execute(task);
             long remaining = TimeUnit.SECONDS.toNanos(config.validationTimeoutSeconds()) - (System.nanoTime() - started);
@@ -223,11 +239,17 @@ public final class ContainerService {
 
     private Map<String, Object> validateNow(String path) {
         if (validationOperation != null) return safely(validationOperation);
-        return safely(() -> {
-            Container container = open(path, digiDoc);
-            ContainerValidationResult report = container.validate();
-            return validationSummary(containerSignatures(container), report);
-        });
+        return safely(() -> validated(open(path, digiDoc)));
+    }
+
+    private Map<String, Object> validateNow(byte[] bytes) {
+        if (validationOperation != null) return safely(validationOperation);
+        return safely(() -> validated(parseOrUnavailable(bytes, digiDoc)));
+    }
+
+    private Map<String, Object> validated(Container container) {
+        ContainerValidationResult report = container.validate();
+        return validationSummary(containerSignatures(container), report);
     }
 
     private static List<Signature> containerSignatures(Container container) {
@@ -296,6 +318,7 @@ public final class ContainerService {
         try {
             byte[] bytes;
             // Read an immutable bounded snapshot, so later validation and extraction see the same bytes.
+            // Path tools keep this secure-directory read. Signing passes its own snapshot to parse.
             try (SecureDirectoryStream<Path> parent = PathPolicy.openDirectory(path.getParent());
                  var channel = parent.newByteChannel(path.getFileName(), Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
                  InputStream input = Channels.newInputStream(channel);
@@ -304,16 +327,28 @@ public final class ContainerService {
                 copyBounded(input, output, config.maxBytes(), null);
                 bytes = output.toByteArray();
             }
-            preflightZip(bytes);
-            Container container = ContainerBuilder.aContainer().withConfiguration(configuration)
-                    .fromStream(new ByteArrayInputStream(bytes)).build();
-            if (!Set.of("ASICE", "ASICS", "BDOC", "DDOC").contains(container.getType())) {
-                throw new ToolException("UNSUPPORTED_CONTAINER", "Unsupported DigiDoc container type.");
-            }
-            return container;
+            return parse(bytes, configuration);
         } catch (IOException e) {
             throw new ToolException("CONTAINER_UNAVAILABLE", "Container could not be read.");
         }
+    }
+
+    private Container parseOrUnavailable(byte[] bytes, Configuration configuration) {
+        try {
+            return parse(bytes, configuration);
+        } catch (IOException e) {
+            throw new ToolException("CONTAINER_UNAVAILABLE", "Container could not be read.");
+        }
+    }
+
+    private Container parse(byte[] bytes, Configuration configuration) throws IOException {
+        preflightZip(bytes);
+        Container container = ContainerBuilder.aContainer().withConfiguration(configuration)
+                .fromStream(new ByteArrayInputStream(bytes)).build();
+        if (!Set.of("ASICE", "ASICS", "BDOC", "DDOC").contains(container.getType())) {
+            throw new ToolException("UNSUPPORTED_CONTAINER", "Unsupported DigiDoc container type.");
+        }
+        return container;
     }
 
     private void preflightZip(byte[] bytes) throws IOException {
