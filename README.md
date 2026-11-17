@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/paat/digidoc-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/paat/digidoc-mcp/actions/workflows/ci.yml)
 
-An **unofficial** read-only MCP server for inspecting and validating Estonian DigiDoc containers. This project is **not affiliated with or endorsed by RIA**. It uses [DigiDoc4j](https://github.com/open-eid/digidoc4j) and the [official MCP Java SDK](https://github.com/modelcontextprotocol/java-sdk), with MCP JSON-RPC over stdio.
+An **unofficial** MCP server for inspecting and validating Estonian DigiDoc containers. It is read-only unless Smart-ID signing is explicitly enabled. This project is **not affiliated with or endorsed by RIA**. It uses [DigiDoc4j](https://github.com/open-eid/digidoc4j) and the [official MCP Java SDK](https://github.com/modelcontextprotocol/java-sdk), with MCP JSON-RPC over stdio.
 
-The server opens ASiC-E / BDOC containers, lists signatures, extracts individual data files, and validates signatures. ASiC-S and legacy DDOC are supported where DigiDoc4j supports them. It exposes no signing, container creation, or CDOC tools. Extraction writes a separate file; it does not modify the source container.
+The server opens ASiC-E / BDOC containers, lists signatures, extracts individual data files, and validates signatures. ASiC-S and legacy DDOC are supported where DigiDoc4j supports them. It exposes no container creation or CDOC tools. Signing is off unless `DIGIDOC_MCP_SIGNING=smartid` on Windows. Extraction writes a separate file; it does not modify the source container.
 
 ## Build and run
 
@@ -36,10 +36,14 @@ DIGIDOC_MCP_ROOTS=/srv/digidoc/input:/srv/digidoc/output \
 | `DIGIDOC_MCP_MODE` | `prod` | `prod` selects DigiDoc4j `Configuration.Mode.PROD`; `test` selects `TEST` and its test trust lists. Use `test` only for test-signed containers. |
 | `DIGIDOC_MCP_VALIDATION_TIMEOUT_SECONDS` | `120` | Positive whole-second deadline for each validation, including waiting for the validation worker, parsing and trust-list downloads. |
 | `DIGIDOC_MCP_TSL_CACHE` | `~/.cache/digidoc-mcp/tsl` | Trust-list cache directory; the default `~` means the Java process user's home directory. |
+| `DIGIDOC_MCP_SIGNING` | unset | `smartid` enables Windows Smart-ID signing. Unset or empty keeps the server read-only. Any other value is `INVALID_CONFIG`. |
+| `DIGIDOC_MCP_SMARTID_CODE` | required when signing is enabled | 11-digit Estonian personal code (birth date and check digit). Never logged and never included in an error. |
+| `DIGIDOC_MCP_DIGIDOC4` | discover `qdigidoc4.exe` | Optional path to DigiDoc4. See Signing. |
+| `DIGIDOC_MCP_SIGN_TIMEOUT_SECONDS` | `180` | Positive whole seconds to wait for the signed container. |
 
 Every tool's `path`, and extraction's `output_dir`, must resolve with `toRealPath()` inside an allowed root. Symlinks and `..` cannot be used to escape the roots. `output_dir` must already exist. Relative paths are relative to the server process's working directory; absolute paths are clearer, especially over SSH. All paths refer to the machine running Java.
 
-An extraction name must exactly match a container data file name and must not be absolute or contain `/`, `\`, `..`, or NUL. Existing targets are refused unless `overwrite` is `true`; symlink targets are refused. Extraction is bounded, and an aborted extraction removes its partial file. Before DigiDoc4j parses a container, preflight checks the ZIP central directory against the complete local-entry chain and counts actual inflated bytes. Nested ZIP containers and decoded DDOC bodies share one byte budget and a 10,000-entry cap, with at most two nested container levels. Ambiguous layouts, concatenated/trailing archives, split ZIPs and ZIP64 are refused. File access requires a filesystem provider with Java `SecureDirectoryStream` support (the intended runtime is Linux); unsupported providers return a tool error.
+An extraction name must exactly match a container data file name and must not be absolute or contain `/`, `\`, `..`, or NUL. Existing targets are refused unless `overwrite` is `true`; symlink targets are refused. Extraction is bounded, and an aborted extraction removes its partial file. Before DigiDoc4j parses a container, preflight checks the ZIP central directory against the complete local-entry chain and counts actual inflated bytes. Nested ZIP containers and decoded DDOC bodies share one byte budget and a 10,000-entry cap, with at most two nested container levels. Ambiguous layouts, concatenated/trailing archives, split ZIPs and ZIP64 are refused. Opening, listing, extraction, and path-based validation require a filesystem provider with Java `SecureDirectoryStream` support (the intended runtime for those tools is Linux); unsupported providers return a tool error. Smart-ID signing reads the new container with a direct bounded snapshot, so that read does not need `SecureDirectoryStream`.
 
 Legacy DDOC support is restricted to nonempty embedded data files with safe single file names. Detached/hash-only files, empty embedded bodies, DTDs, and entity references are refused before the legacy parser runs, preventing implicit reads of referenced local files. Nested DDOC checks also cover the legacy reader's acceptance of junk before the XML. ASiC-S XML payloads cannot contain DTDs because its legacy-reader probe can process declarations before identifying a DDOC. Configuration uses DigiDoc4j's bundled defaults plus the environment settings above; working-directory YAML files are not loaded.
 
@@ -51,7 +55,7 @@ Opening, listing, and extraction use an empty trust source to avoid network acce
 
 ## Tools and results
 
-`tools/list` advertises JSON input schemas for exactly four tools. Successful calls return both MCP `structuredContent` and matching JSON text content; failures return a structured tool error with `isError: true` and an `error` object containing `code` and `message`. Times use ISO-8601 UTC strings, and absent signature metadata is `null`.
+`tools/list` advertises JSON input schemas for exactly four tools when signing is off. `DIGIDOC_MCP_SIGNING=smartid` also advertises `sign_with_smartid`. Successful calls return both MCP `structuredContent` and matching JSON text content; failures return a structured tool error with `isError: true` and an `error` object containing `code` and `message`. Times use ISO-8601 UTC strings, and absent signature metadata is `null`.
 
 | Tool | Input object | Result fields |
 | --- | --- | --- |
@@ -59,6 +63,7 @@ Opening, listing, and extraction use an empty trust source to avoid network acce
 | `list_signatures` | `{"path":"/srv/digidoc/input/example.asice"}` | `signatures`, each with `id`, `signer_common_name`, `personal_identification_code`, `claimed_signing_time`, `trusted_signing_time`, `profile`, `signature_method`, `certificate_issuer` |
 | `extract_file` | `{"path":"/srv/digidoc/input/example.asice","file_name":"document.txt","output_dir":"/srv/digidoc/output","overwrite":false}` | `path` (absolute written path), `sha256` (hex digest) |
 | `validate_container` | `{"path":"/srv/digidoc/input/example.asice"}` | `result` (`VALID`, `INVALID`, or `INDETERMINATE`), `signatures`, container-level `errors` and `warnings` |
+| `sign_with_smartid` | `{"path":"/srv/digidoc/input/contract.pdf"}` (only when signing is enabled) | `path`, `sha256`, and the same validation summary (`result`, `signatures`, `errors`, `warnings`) |
 
 `overwrite` is optional and defaults to `false`; all other listed inputs are required. Personal identification codes come from the signer's certificate subject `serialNumber`, when present. Profiles are normalized to `B`, `T`, `LT`, or `LTA` where applicable. Listing reports the embedded evidence profile; validation reports DigiDoc4j's assessed profile, which can differ when evidence is incomplete or untrusted. A trusted signing time reports timestamp/OCSP metadata; use `validate_container` to assess that evidence's trustworthiness.
 
@@ -75,6 +80,46 @@ For example, `open_container` returns a payload shaped like:
   "signature_count": 1
 }
 ```
+
+## Signing (opt-in, Windows)
+
+Signing is off unless `DIGIDOC_MCP_SIGNING=smartid`. The server then advertises `sign_with_smartid`, which takes `{"path": "<file inside an allowed root>"}` and no other arguments. It signs that one file by driving the person's installed [DigiDoc4](https://github.com/open-eid/DigiDoc4-Client) and RIA Smart-ID, the same way as signing by hand. DigiDoc4 must be installed on the Windows PC where this server runs. The server does not call Smart-ID itself and does not see the PIN. **PIN2 in the Smart-ID app is the user's consent.** Enabling signing on any other operating system fails startup with `INVALID_CONFIG`. One signature runs at a time.
+
+Before it writes settings or starts DigiDoc4, the server returns `DIGIDOC4_RUNNING` when a process executable's file name is `qdigidoc4.exe` (case-insensitive). Otherwise, before launch, the server writes `HKCU\Software\RIA\qdigidoc4` (DigiDoc4's `QSettings` organization `RIA`, application `qdigidoc4`):
+
+| Name | Value |
+| --- | --- |
+| `SmartID` | `DIGIDOC_MCP_SMARTID_CODE` |
+| `SmartIDCountry` | `EE` |
+| `SmartIDSettings` | `true` |
+
+Those values are written as `REG_SZ`, which is how Qt 6 stores `QString` and `bool` (`true` / `false`). `SmartID`, `SmartIDCountry`, and `SmartIDSettings` stay in `HKCU\Software\RIA\qdigidoc4` after signing. `SmartIDSettings=true` is DigiDoc4's own remember setting, so DigiDoc4 keeps the personal code and country. Each signing overwrites any earlier value of those three names. The personal code is passed to that helper on standard input. It is never placed on a process command line and never written to the log or to an error message. The server then starts `qdigidoc4.exe -sign <file>` and passes that process id to a bundled PowerShell script. The script automates only that process: it uses `System.Windows.Automation` to click the container page's add-signature control, select the Smart-ID tab (`tabs`, index 2: ID-card, Mobile-ID, Smart-ID), and click `sign`. It looks up controls by AutomationId (and, for the add-signature button, class name). It does not use screen coordinates or translated labels, and it does not search for another `qdigidoc4` process. If the launched process exits early, including a single-instance handoff, the tool returns `UI_AUTOMATION_FAILED`. DigiDoc4's role/address dialog must stay off (`RoleAddressInfo` is false by default) or that script cannot reach the signing dialog.
+
+The new container is `<directory>/<complete base name>.asice`, the path `FileDialog::createNewFileName` uses when the file is absent and the directory is writable (DigiDoc4-Client `de77bcf`, Qt `QFileInfo::completeBaseName()` plus `.asice`). Examples: `contract.pdf` → `contract.asice`, `notes.tar.gz` → `notes.tar.asice`, `README` → `README.asice`. A leading dot is not an extension (`.gitignore` → `.gitignore.asice`). If that file already exists, the tool returns `TARGET_EXISTS` and does not overwrite it or open DigiDoc4's Save dialog. The input file itself is not modified. An input whose name ends with `.asice`, `.sce`, `.bdoc`, `.asics`, `.scs`, `.ddoc`, or `.edoc` (any case) is refused with `INVALID_ARGUMENT` (`Signing an existing container is not supported.`) before DigiDoc4 starts.
+
+The tool waits until the `.asice` exists, its size and modification time stay unchanged for a short interval, and it contains at least one signature. DigiDoc4 can create an unsigned container before PIN2, and that file is not treated as finished. The wait is bounded by `DIGIDOC_MCP_SIGN_TIMEOUT_SECONDS` (default 180). It then reads one bounded snapshot of the confined target (`NOFOLLOW` direct read, size at most `DIGIDOC_MCP_MAX_BYTES`) and validates those bytes with the same parser, worker, and deadline as `validate_container`. Success requires indication `VALID` and a signature whose `personal_identification_code` equals the configured code or `PNOEE-` followed by that code (ETSI EN 319 412-1). Other country prefixes, such as `PNOLV-`, do not match. The result is the new container's `path`, `sha256` of those same bytes, and that validation summary. If the deadline expires, a target that appeared during the call is deleted only when its snapshot was read and parsed and lists zero signatures. A read or parse failure, including a container over the byte limit, keeps the file. A signed container is kept, and the tool still returns `SIGN_TIMEOUT`.
+
+| Code | When |
+| --- | --- |
+| `SIGNING_DISABLED` | The tool was called while signing is off. |
+| `TARGET_EXISTS` | The `.asice` path already exists. Nothing is overwritten. |
+| `DIGIDOC4_NOT_FOUND` | `qdigidoc4.exe` is missing. An explicit `DIGIDOC_MCP_DIGIDOC4` path is not replaced with the default location. |
+| `DIGIDOC4_RUNNING` | A process whose executable file name is `qdigidoc4.exe` (any case) is already running. Close DigiDoc4 and try again. |
+| `UI_AUTOMATION_FAILED` | The UI script could not find a control, it exited non-zero, or the launched DigiDoc4 process exited early. |
+| `SIGN_TIMEOUT` | The container did not finish before the deadline. An `.asice` created during that call is deleted only when its snapshot was read and parsed and lists zero signatures. A read or parse failure keeps the file. A signed container is kept. |
+| `SIGNATURE_NOT_VALID` | The container finished but is not `VALID`, or no signature matches the configured code. The file is left in place. |
+
+`PATH_NOT_ALLOWED` and `INVALID_PATH` are the same confinement errors as the other tools. Configuration errors use `INVALID_CONFIG` and do not include the personal code.
+
+These points are **unverified until the Windows spike** (no Windows DigiDoc4 host was available when this was written):
+
+- Default install path `%ProgramFiles%\RIA\DigiDoc4\qdigidoc4.exe`, then `%ProgramFiles(x86)%\RIA\DigiDoc4\qdigidoc4.exe`.
+- Qt exposes widget object names as AutomationId (`tabs`, `sign`).
+- The add-signature control is `MainAction`. That button has no object name in DigiDoc4-Client `de77bcf`, so the script tries AutomationId `MainAction` and then ClassName `MainAction`.
+- A `QTabBar` tab can be selected with `SelectionItemPattern`, and Smart-ID is child index 2.
+- An already running DigiDoc4 is refused with `DIGIDOC4_RUNNING`. The UI script is bound to the process id this server started. If that process exits early, signing returns `UI_AUTOMATION_FAILED`.
+- DigiDoc4 honors the registry values with the `REG_SZ` types above.
+- PDF and other inputs are wrapped silently when the predicted `.asice` does not exist. If it exists, or the directory is not writable, DigiDoc4 would show a Save dialog; this server refuses an existing target instead.
 
 ## Claude Desktop
 
@@ -148,7 +193,7 @@ mvn -B verify                         # Includes network-dependent validation
 mvn -B verify -DskipNetworkTests       # Excludes tests tagged "network"
 ```
 
-The default suite validates test-signed fixtures in TEST mode, detects tampered data, inspects multiple files and signatures, checks confinement and extraction limits, and launches the packaged jar for an MCP stdio smoke test. The smoke test initializes the server, checks the four advertised tools, calls `open_container`, and rejects any non-JSON stdout line. Network-dependent tests need reachable trust-list services; skipping them does not verify live trust validation. Maven still needs cached dependencies or network access to resolve them.
+The default suite validates test-signed fixtures in TEST mode, detects tampered data, inspects multiple files and signatures, checks confinement and extraction limits, and launches the packaged jar for an MCP stdio smoke test. Signing tests use a fake DigiDoc4 driver on Linux and are not network-tagged. The smoke test still expects exactly four tools, because it does not set `DIGIDOC_MCP_SIGNING`. The smoke test initializes the server, checks the four advertised tools, calls `open_container`, and rejects any non-JSON stdout line. Network-dependent tests need reachable trust-list services; skipping them does not verify live trust validation. Maven still needs cached dependencies or network access to resolve them.
 
 Fixture sources and attribution are recorded in [src/test/resources/README.md](src/test/resources/README.md).
 

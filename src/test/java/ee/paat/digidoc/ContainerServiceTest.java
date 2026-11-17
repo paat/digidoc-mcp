@@ -39,6 +39,11 @@ class ContainerServiceTest {
         assertEquals(Map.of("name", "test.txt", "mime_type", "text/plain", "size_bytes", 15L), files.getFirst());
     }
 
+    @Test void byteEntryPointsMatchPathListingForTheFixture() throws Exception {
+        byte[] bytes = Files.readAllBytes(fixture);
+        assertEquals(service.listSignatures(fixture.toString()), service.listSignatures(bytes));
+    }
+
     @Test void listSignaturesReportsCertificateAndTimes() {
         var signatures = rows(service.listSignatures(fixture.toString()).get("signatures"));
         assertEquals(1, signatures.size());
