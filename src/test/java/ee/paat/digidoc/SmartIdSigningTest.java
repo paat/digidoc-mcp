@@ -143,6 +143,17 @@ class SmartIdSigningTest {
         assertNoCode(error(rejected).path("message").asString());
     }
 
+    @Test void personalCodeMatchesBareSerialOrEstonianPrefixOnly() {
+        assertTrue(SmartIdSigning.serialMatches(FIXTURE_CODE, FIXTURE_CODE));
+        assertTrue(SmartIdSigning.serialMatches("PNOEE-" + FIXTURE_CODE, FIXTURE_CODE));
+        assertFalse(SmartIdSigning.serialMatches("PNOLV-" + FIXTURE_CODE, FIXTURE_CODE));
+        assertFalse(SmartIdSigning.serialMatches("PNOEE-" + OTHER_CODE, FIXTURE_CODE));
+        assertFalse(SmartIdSigning.serialMatches(OTHER_CODE, FIXTURE_CODE));
+        assertFalse(SmartIdSigning.serialMatches("PNOLT-" + FIXTURE_CODE, FIXTURE_CODE));
+        assertFalse(SmartIdSigning.serialMatches("pnoee-" + FIXTURE_CODE, FIXTURE_CODE));
+        assertFalse(SmartIdSigning.serialMatches(null, FIXTURE_CODE));
+    }
+
     @Test void personalCodeMismatchAndInvalidIndicationLeaveTheContainer() throws Exception {
         Path root = directory("allowed");
         Path fixture = TestFixtures.copyValid(root);

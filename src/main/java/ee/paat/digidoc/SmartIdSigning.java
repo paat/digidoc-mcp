@@ -189,11 +189,16 @@ final class SmartIdSigning {
         Object listed = containers.listSignatures(bytes).get("signatures");
         if (!(listed instanceof List<?> signatures)) return false;
         for (Object row : signatures) {
-            if (row instanceof Map<?, ?> signature && personalCode.equals(signature.get("personal_identification_code"))) {
+            if (row instanceof Map<?, ?> signature && serialMatches(signature.get("personal_identification_code"), personalCode)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Estonian Smart-ID and ID-card serialNumber is the code or {@code PNOEE-} plus the code (ETSI EN 319 412-1). */
+    static boolean serialMatches(Object serial, String code) {
+        return serial instanceof String value && (value.equals(code) || value.equals("PNOEE-" + code));
     }
 
     private boolean hasSignatures(byte[] bytes) {
