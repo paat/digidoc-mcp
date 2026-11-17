@@ -10,10 +10,18 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.ClosedWatchServiceException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -356,6 +364,71 @@ class SmartIdSigningTest {
         assertEquals("SIGN_TIMEOUT", timedOut.code());
         assertNoCode(timedOut.getMessage());
         assertEquals(List.of("drive", "close"), timeout.events);
+
+        // Unreadable until close() returns, so the zero-signature check can remove the target only after close.
+        byte[] unsignedBytes = Files.readAllBytes(TestFixtures.unsigned(root, "payload.bin", new byte[] {1, 2, 3}));
+        Path target = root.resolve("contract.asice");
+        List<String> orderedEvents = Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch cleaned = new CountDownLatch(1);
+        WatchService watch = FileSystems.getDefault().newWatchService();
+        Thread watcher = new Thread(() -> {
+            try {
+                while (true) {
+                    WatchKey key = watch.take();
+                    for (WatchEvent<?> event : key.pollEvents()) {
+                        if (event.kind() == StandardWatchEventKinds.ENTRY_DELETE
+                                && "contract.asice".equals(String.valueOf(event.context()))) {
+                            orderedEvents.add("cleanup");
+                            cleaned.countDown();
+                        }
+                    }
+                    if (!key.reset()) return;
+                }
+            } catch (InterruptedException | ClosedWatchServiceException ignored) {
+                // Closed after the ordering assertion.
+            }
+        });
+        watcher.setDaemon(true);
+        try {
+            root.register(watch, StandardWatchEventKinds.ENTRY_DELETE);
+            watcher.start();
+            SigningDriver ordered = new SigningDriver() {
+                @Override public void drive(Path executable, Path source, String personalCode) {
+                    orderedEvents.add("drive");
+                    try {
+                        Files.write(SmartIdSigning.containerTarget(source), unsignedBytes);
+                        if (!target.toFile().setReadable(false, false)) throw new IllegalStateException("permissions");
+                    } catch (Exception e) {
+                        throw new IllegalStateException(e);
+                    }
+                }
+
+                @Override public void close() {
+                    orderedEvents.add("close");
+                    if (Files.exists(target) && !target.toFile().setReadable(true, false)) {
+                        throw new IllegalStateException("permissions");
+                    }
+                }
+            };
+            ToolException orderedTimeout = assertThrows(ToolException.class, () -> signing(root, FIXTURE_CODE, exe,
+                    ordered, new ManualClock(), Map.of(), () -> { throw new AssertionError("validated"); }, 1)
+                    .sign(source.toString()));
+            assertEquals("SIGN_TIMEOUT", orderedTimeout.code());
+            assertNoCode(orderedTimeout.getMessage());
+            assertTrue(cleaned.await(5, TimeUnit.SECONDS), orderedEvents.toString());
+            List<String> order;
+            synchronized (orderedEvents) {
+                order = List.copyOf(orderedEvents);
+            }
+            assertEquals(List.of("drive", "close", "cleanup"), order);
+            assertFalse(Files.exists(target));
+            assertEquals("sign me", Files.readString(source));
+        } finally {
+            watch.close();
+            watcher.interrupt();
+            if (watcher.getState() != Thread.State.NEW) watcher.join(1_000);
+            if (Files.exists(target)) target.toFile().setReadable(true);
+        }
 
         ClosingDriver ui = new ClosingDriver((executable, file, code) -> {
             throw new ToolException("UI_AUTOMATION_FAILED", "DigiDoc4 signing controls could not be used.");

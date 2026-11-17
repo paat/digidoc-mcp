@@ -148,11 +148,11 @@ final class SmartIdSigning {
             throw new ToolException("TARGET_EXISTS", "Signing target already exists.");
         }
         Path executable = resolveExecutable();
+        boolean appeared = false;
         try {
             driver.drive(executable, source, personalCode);
             long deadline = clock.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
             Snapshot previous = null;
-            boolean appeared = false;
             while (clock.nanoTime() < deadline) {
                 Snapshot current = snapshot(target);
                 if (current != null) appeared = true;
@@ -170,11 +170,12 @@ final class SmartIdSigning {
                 previous = current;
                 clock.sleep(pollMillis);
             }
-            if (appeared && !target.equals(source) && snapshotListsZeroSignatures(target)) deleteIncomplete(target);
-            throw new ToolException("SIGN_TIMEOUT", "Signing did not finish before the deadline.");
         } finally {
             driver.close();
         }
+        // The driver is already closed, so DigiDoc4 cannot save a signature between this check and the delete.
+        if (appeared && !target.equals(source) && snapshotListsZeroSignatures(target)) deleteIncomplete(target);
+        throw new ToolException("SIGN_TIMEOUT", "Signing did not finish before the deadline.");
     }
 
     private Path resolveExecutable() {
