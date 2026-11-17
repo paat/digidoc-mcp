@@ -153,7 +153,7 @@ final class SmartIdSigning {
             previous = current;
             clock.sleep(pollMillis);
         }
-        if (appeared && !target.equals(source)) deleteIncomplete(target);
+        if (appeared && !target.equals(source) && !snapshotHasSignature(target)) deleteIncomplete(target);
         throw new ToolException("SIGN_TIMEOUT", "Signing did not finish before the deadline.");
     }
 
@@ -199,6 +199,16 @@ final class SmartIdSigning {
     /** Estonian Smart-ID and ID-card serialNumber is the code or {@code PNOEE-} plus the code (ETSI EN 319 412-1). */
     static boolean serialMatches(Object serial, String code) {
         return serial instanceof String value && (value.equals(code) || value.equals("PNOEE-" + code));
+    }
+
+    /** Timeout keeps a target whose snapshot parses with at least one signature. */
+    private boolean snapshotHasSignature(Path target) {
+        try {
+            if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return false;
+            return hasSignatures(readSnapshot(realInside(target)));
+        } catch (ToolException e) {
+            return false;
+        }
     }
 
     private boolean hasSignatures(byte[] bytes) {

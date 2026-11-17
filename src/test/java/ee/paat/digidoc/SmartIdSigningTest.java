@@ -194,6 +194,28 @@ class SmartIdSigningTest {
         assertEquals("stay", Files.readString(kept));
     }
 
+    @Test void timeoutKeepsAContainerThatAlreadyHasASignature() throws Exception {
+        Path root = directory("allowed");
+        Path fixture = TestFixtures.copyValid(root);
+        byte[] signed = Files.readAllBytes(fixture);
+        Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        Path target = root.resolve("contract.asice");
+        Path exe = executable();
+        AppConfig config = new AppConfig(List.of(root), AppConfig.DEFAULT_MAX_BYTES, Configuration.Mode.TEST,
+                root.resolve("tsl"), 30, new AppConfig.Signing(FIXTURE_CODE, exe, 1));
+        SmartIdSigning signing = new SmartIdSigning(config,
+                new ContainerService(config, () -> { throw new AssertionError("validated"); }),
+                (executable, file, code) -> {
+                    try { Files.write(SmartIdSigning.containerTarget(file), signed); }
+                    catch (Exception e) { throw new IllegalStateException(e); }
+                }, new ManualClock(), Map.of(), 2_000);
+        ToolException error = assertThrows(ToolException.class, () -> signing.sign(source.toString()));
+        assertEquals("SIGN_TIMEOUT", error.code());
+        assertNoCode(error.getMessage());
+        assertArrayEquals(signed, Files.readAllBytes(target));
+        assertEquals("sign me", Files.readString(source));
+    }
+
     @Test void timeoutDeletesAnIncompleteContainerCreatedDuringTheCall() throws Exception {
         Path root = directory("allowed");
         Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
