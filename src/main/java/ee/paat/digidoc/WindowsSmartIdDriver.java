@@ -24,6 +24,10 @@ final class WindowsSmartIdDriver implements SigningDriver {
     private static final Logger LOG = LoggerFactory.getLogger(WindowsSmartIdDriver.class);
     private static final long SETTINGS_WAIT_SECONDS = 30;
     private static final long UI_WAIT_SECONDS = 45;
+    /** Grace before {@code destroyForcibly()}. Unverified until the Windows spike. */
+    private static final long PROCESS_CLOSE_WAIT_MILLIS = 2_000;
+
+    private Process launched;
 
     @Override
     public void drive(Path executable, Path source, String personalCode) {
@@ -40,6 +44,7 @@ final class WindowsSmartIdDriver implements SigningDriver {
                     .redirectError(ProcessBuilder.Redirect.DISCARD)
                     .redirectInput(ProcessBuilder.Redirect.PIPE)
                     .start();
+            launched = app;
             app.getOutputStream().close();
             requireAlive(app);
             int ui = runScript("smartid-ui.ps1", true, null, UI_WAIT_SECONDS, Long.toString(app.pid()));
@@ -73,6 +78,31 @@ final class WindowsSmartIdDriver implements SigningDriver {
         String suffix = "qdigidoc4.exe";
         return command != null && command.length() >= suffix.length()
                 && command.regionMatches(true, command.length() - suffix.length(), suffix, 0, suffix.length());
+    }
+
+    /**
+     * Stops the process started by {@link #drive}. {@code destroy()}, then
+     * {@code destroyForcibly()} if it is still alive after a short wait.
+     */
+    @Override
+    public void close() {
+        Process app = launched;
+        launched = null;
+        end(app);
+    }
+
+    static void end(Process process) {
+        if (process == null) return;
+        process.destroy();
+        try {
+            if (!process.waitFor(PROCESS_CLOSE_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                process.waitFor(PROCESS_CLOSE_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+            }
+        } catch (InterruptedException e) {
+            process.destroyForcibly();
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** The launched process exited before UI automation finished (single-instance handoff). */

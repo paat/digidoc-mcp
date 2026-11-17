@@ -312,6 +312,53 @@ class SmartIdSigningTest {
         assertEquals("sign me", Files.readString(source));
     }
 
+    @Test void driverIsClosedOnSuccessTimeoutAndUiFailure() throws Exception {
+        Path root = directory("allowed");
+        Path fixture = TestFixtures.copyValid(root);
+        Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        Path exe = executable();
+        ClosingDriver success = new ClosingDriver((executable, file, code) -> {
+            try { Files.copy(fixture, SmartIdSigning.containerTarget(file)); }
+            catch (Exception e) { throw new IllegalStateException(e); }
+        });
+        Map<String, Object> result = signing(root, FIXTURE_CODE, exe, success, new ManualClock(), Map.of(),
+                summary("VALID"), 30).sign(source.toString());
+        assertEquals("VALID", result.get("result"));
+        assertEquals(List.of("drive", "close"), success.events);
+
+        Files.delete(root.resolve("contract.asice"));
+        ClosingDriver timeout = new ClosingDriver((executable, file, code) -> { });
+        ToolException timedOut = assertThrows(ToolException.class, () -> signing(root, FIXTURE_CODE, exe, timeout,
+                new ManualClock(), Map.of(), summary("VALID"), 1).sign(source.toString()));
+        assertEquals("SIGN_TIMEOUT", timedOut.code());
+        assertNoCode(timedOut.getMessage());
+        assertEquals(List.of("drive", "close"), timeout.events);
+
+        ClosingDriver ui = new ClosingDriver((executable, file, code) -> {
+            throw new ToolException("UI_AUTOMATION_FAILED", "DigiDoc4 signing controls could not be used.");
+        });
+        ToolException failed = assertThrows(ToolException.class, () -> signing(root, FIXTURE_CODE, exe, ui,
+                new ManualClock(), Map.of(), summary("VALID"), 30).sign(source.toString()));
+        assertEquals("UI_AUTOMATION_FAILED", failed.code());
+        assertNoCode(failed.getMessage());
+        assertEquals(List.of("drive", "close"), ui.events);
+        assertFalse(Files.exists(root.resolve("contract.asice")));
+    }
+
+    @Test void closeEndsALaunchedProcess() throws Exception {
+        Process alive = new ProcessBuilder("/usr/bin/sleep", "30")
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start();
+        try {
+            assertTrue(alive.isAlive());
+            WindowsSmartIdDriver.end(alive);
+            assertFalse(alive.isAlive());
+        } finally {
+            if (alive.isAlive()) alive.destroyForcibly();
+        }
+    }
+
     @Test void uiAutomationFailureIsPropagatedAndDoesNotEchoTheCode() throws Exception {
         Path root = directory("allowed");
         Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
@@ -586,6 +633,20 @@ class SmartIdSigningTest {
             assertNotNull(input, name);
             return new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    private static final class ClosingDriver implements SigningDriver {
+        private final SigningDriver delegate;
+        private final List<String> events = new java.util.ArrayList<>();
+
+        ClosingDriver(SigningDriver delegate) { this.delegate = delegate; }
+
+        @Override public void drive(Path executable, Path source, String personalCode) {
+            events.add("drive");
+            delegate.drive(executable, source, personalCode);
+        }
+
+        @Override public void close() { events.add("close"); }
     }
 
     private static final class ManualClock implements SmartIdSigning.WaitClock {

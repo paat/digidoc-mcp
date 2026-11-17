@@ -132,29 +132,33 @@ final class SmartIdSigning {
             throw new ToolException("TARGET_EXISTS", "Signing target already exists.");
         }
         Path executable = resolveExecutable();
-        driver.drive(executable, source, personalCode);
-        long deadline = clock.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
-        Snapshot previous = null;
-        boolean appeared = false;
-        while (clock.nanoTime() < deadline) {
-            Snapshot current = snapshot(target);
-            if (current != null) appeared = true;
-            if (current != null && previous != null && current.equals(previous) && current.size > 0) {
-                Path real = null;
-                byte[] bytes = null;
-                try {
-                    real = realInside(target);
-                    bytes = readSnapshot(real);
-                } catch (ToolException e) {
-                    bytes = null;
+        try {
+            driver.drive(executable, source, personalCode);
+            long deadline = clock.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+            Snapshot previous = null;
+            boolean appeared = false;
+            while (clock.nanoTime() < deadline) {
+                Snapshot current = snapshot(target);
+                if (current != null) appeared = true;
+                if (current != null && previous != null && current.equals(previous) && current.size > 0) {
+                    Path real = null;
+                    byte[] bytes = null;
+                    try {
+                        real = realInside(target);
+                        bytes = readSnapshot(real);
+                    } catch (ToolException e) {
+                        bytes = null;
+                    }
+                    if (bytes != null && hasSignatures(bytes)) return finish(real, bytes);
                 }
-                if (bytes != null && hasSignatures(bytes)) return finish(real, bytes);
+                previous = current;
+                clock.sleep(pollMillis);
             }
-            previous = current;
-            clock.sleep(pollMillis);
+            if (appeared && !target.equals(source) && snapshotListsZeroSignatures(target)) deleteIncomplete(target);
+            throw new ToolException("SIGN_TIMEOUT", "Signing did not finish before the deadline.");
+        } finally {
+            driver.close();
         }
-        if (appeared && !target.equals(source) && snapshotListsZeroSignatures(target)) deleteIncomplete(target);
-        throw new ToolException("SIGN_TIMEOUT", "Signing did not finish before the deadline.");
     }
 
     private Path resolveExecutable() {
