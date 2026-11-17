@@ -1,9 +1,14 @@
 # Drives DigiDoc4's signing view with UI Automation. No personal code is read or printed.
+# The only process id is the launched qdigidoc4, passed as the first argument.
 # Unverified until the Windows spike:
 # - Qt 6 exposes widget objectName as AutomationId (tabs, sign).
 # - The container page's add-signature control is MainAction, which has no objectName
 #   in DigiDoc4-Client de77bcf. The helper tries AutomationId "MainAction", then ClassName.
 # - Smart-ID is tab index 2 (ID-card, Mobile-ID, Smart-ID) via SelectionItemPattern.
+param(
+    [Parameter(Mandatory = $true)]
+    [int]$ProcessId
+)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -40,18 +45,17 @@ function Find-AddSignature($root, $processId) {
 try {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
+    if ($ProcessId -le 0) { exit 1 }
     $deadline = (Get-Date).AddSeconds(30)
     $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $processId = 0
+    $processId = $ProcessId
+    $ready = $false
     while ((Get-Date) -lt $deadline) {
-        $proc = Get-Process -Name qdigidoc4 -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $proc) {
-            $processId = [int]$proc.Id
-            if ($null -ne (Find-TopLevel $root $processId)) { break }
-        }
+        if ($null -eq (Get-Process -Id $processId -ErrorAction SilentlyContinue)) { exit 1 }
+        if ($null -ne (Find-TopLevel $root $processId)) { $ready = $true; break }
         Start-Sleep -Milliseconds 200
     }
-    if ($processId -eq 0) { exit 1 }
+    if (-not $ready) { exit 1 }
 
     $add = $null
     while ((Get-Date) -lt $deadline -and $null -eq $add) {

@@ -85,7 +85,7 @@ For example, `open_container` returns a payload shaped like:
 
 Signing is off unless `DIGIDOC_MCP_SIGNING=smartid`. The server then advertises `sign_with_smartid`, which takes `{"path": "<file inside an allowed root>"}` and no other arguments. It signs that one file by driving the person's installed [DigiDoc4](https://github.com/open-eid/DigiDoc4-Client) and RIA Smart-ID, the same way as signing by hand. DigiDoc4 must be installed on the Windows PC where this server runs. The server does not call Smart-ID itself and does not see the PIN. **PIN2 in the Smart-ID app is the user's consent.** Enabling signing on any other operating system fails startup with `INVALID_CONFIG`. One signature runs at a time.
 
-Before launch, the server writes `HKCU\Software\RIA\qdigidoc4` (DigiDoc4's `QSettings` organization `RIA`, application `qdigidoc4`):
+Before it writes settings or starts DigiDoc4, the server returns `DIGIDOC4_RUNNING` when any process command already ends with `qdigidoc4.exe` (case-insensitive). Otherwise, before launch, the server writes `HKCU\Software\RIA\qdigidoc4` (DigiDoc4's `QSettings` organization `RIA`, application `qdigidoc4`):
 
 | Name | Value |
 | --- | --- |
@@ -93,7 +93,7 @@ Before launch, the server writes `HKCU\Software\RIA\qdigidoc4` (DigiDoc4's `QSet
 | `SmartIDCountry` | `EE` |
 | `SmartIDSettings` | `true` |
 
-Those values are written as `REG_SZ`, which is how Qt 6 stores `QString` and `bool` (`true` / `false`). The personal code is passed to that helper on standard input. It is never placed on a process command line and never written to the log or to an error message. The server then starts `qdigidoc4.exe -sign <file>`. A bundled PowerShell script uses `System.Windows.Automation` to click the container page's add-signature control, select the Smart-ID tab (`tabs`, index 2: ID-card, Mobile-ID, Smart-ID), and click `sign`. It looks up controls by AutomationId (and, for the add-signature button, class name). It does not use screen coordinates or translated labels. DigiDoc4's role/address dialog must stay off (`RoleAddressInfo` is false by default) or that script cannot reach the signing dialog.
+Those values are written as `REG_SZ`, which is how Qt 6 stores `QString` and `bool` (`true` / `false`). The personal code is passed to that helper on standard input. It is never placed on a process command line and never written to the log or to an error message. The server then starts `qdigidoc4.exe -sign <file>` and passes that process id to a bundled PowerShell script. The script automates only that process: it uses `System.Windows.Automation` to click the container page's add-signature control, select the Smart-ID tab (`tabs`, index 2: ID-card, Mobile-ID, Smart-ID), and click `sign`. It looks up controls by AutomationId (and, for the add-signature button, class name). It does not use screen coordinates or translated labels, and it does not search for another `qdigidoc4` process. If the launched process exits early, including a single-instance handoff, the tool returns `UI_AUTOMATION_FAILED`. DigiDoc4's role/address dialog must stay off (`RoleAddressInfo` is false by default) or that script cannot reach the signing dialog.
 
 The new container is `<directory>/<complete base name>.asice`, the path `FileDialog::createNewFileName` uses when the file is absent and the directory is writable (DigiDoc4-Client `de77bcf`, Qt `QFileInfo::completeBaseName()` plus `.asice`). Examples: `contract.pdf` → `contract.asice`, `notes.tar.gz` → `notes.tar.asice`, `README` → `README.asice`. A leading dot is not an extension (`.gitignore` → `.gitignore.asice`). If that file already exists, the tool returns `TARGET_EXISTS` and does not overwrite it or open DigiDoc4's Save dialog. The input file itself is not modified.
 
@@ -104,7 +104,8 @@ The tool waits until the `.asice` exists, its size and modification time stay un
 | `SIGNING_DISABLED` | The tool was called while signing is off. |
 | `TARGET_EXISTS` | The `.asice` path already exists. Nothing is overwritten. |
 | `DIGIDOC4_NOT_FOUND` | `qdigidoc4.exe` is missing. An explicit `DIGIDOC_MCP_DIGIDOC4` path is not replaced with the default location. |
-| `UI_AUTOMATION_FAILED` | The UI script could not find a control, or it exited non-zero. |
+| `DIGIDOC4_RUNNING` | A process whose command ends with `qdigidoc4.exe` is already running. Close DigiDoc4 and try again. |
+| `UI_AUTOMATION_FAILED` | The UI script could not find a control, it exited non-zero, or the launched DigiDoc4 process exited early. |
 | `SIGN_TIMEOUT` | The container did not finish before the deadline. An incomplete `.asice` created during that call is deleted. |
 | `SIGNATURE_NOT_VALID` | The container finished but is not `VALID`, or no signature matches the configured code. The file is left in place. |
 
@@ -116,7 +117,7 @@ These points are **unverified until the Windows spike** (no Windows DigiDoc4 hos
 - Qt exposes widget object names as AutomationId (`tabs`, `sign`).
 - The add-signature control is `MainAction`. That button has no object name in DigiDoc4-Client `de77bcf`, so the script tries AutomationId `MainAction` and then ClassName `MainAction`.
 - A `QTabBar` tab can be selected with `SelectionItemPattern`, and Smart-ID is child index 2.
-- A running DigiDoc4 receives `-sign` through its single-instance handoff.
+- An already running DigiDoc4 is refused with `DIGIDOC4_RUNNING`. The UI script is bound to the process id this server started. If that process exits early, signing returns `UI_AUTOMATION_FAILED`.
 - DigiDoc4 honors the registry values with the `REG_SZ` types above.
 - PDF and other inputs are wrapped silently when the predicted `.asice` does not exist. If it exists, or the directory is not writable, DigiDoc4 would show a Save dialog; this server refuses an existing target instead.
 

@@ -317,6 +317,57 @@ class SmartIdSigningTest {
         assertFalse(uiScript.contains(FIXTURE_CODE));
     }
 
+    @Test void digidoc4CommandRefusesRunningExecutableAndUiCommandCarriesItsPid() throws Exception {
+        assertTrue(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\qdigidoc4.exe"));
+        assertTrue(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\QDIGIDOC4.EXE"));
+        assertTrue(WindowsSmartIdDriver.qdigidoc4Command("/tmp/qdigidoc4.exe"));
+        assertFalse(WindowsSmartIdDriver.qdigidoc4Command("/usr/bin/java"));
+        assertFalse(WindowsSmartIdDriver.qdigidoc4Command("C:\\Program Files\\RIA\\DigiDoc4\\qdigidoc4"));
+        assertFalse(WindowsSmartIdDriver.qdigidoc4Command("C:\\tools\\qdigidoc4.exe.bak"));
+        assertFalse(WindowsSmartIdDriver.qdigidoc4Command(null));
+        ToolException running = assertThrows(ToolException.class, () -> WindowsSmartIdDriver.refuseIfDigidoc4Running(
+                java.util.stream.Stream.of("/usr/bin/java", "C:\\Program Files\\RIA\\DigiDoc4\\qdigidoc4.exe")));
+        assertEquals("DIGIDOC4_RUNNING", running.code());
+        assertEquals("Close DigiDoc4 and try again.", running.getMessage());
+        assertNoCode(running.getMessage());
+        WindowsSmartIdDriver.refuseIfDigidoc4Running(java.util.stream.Stream.of("/bin/sleep"));
+
+        List<String> ui = WindowsSmartIdDriver.powershell(Path.of("C:/tmp/smartid-ui.ps1"), true, "4242");
+        assertEquals("4242", ui.getLast());
+        assertFalse(ui.contains("-Command"));
+        assertFalse(String.join("\n", ui).contains(FIXTURE_CODE));
+        String uiScript = resource("/ee/paat/digidoc/smartid-ui.ps1");
+        assertTrue(uiScript.contains("[int]$ProcessId"));
+        assertTrue(uiScript.contains("Get-Process -Id $processId"));
+        assertFalse(uiScript.contains("Get-Process -Name qdigidoc4"));
+        assertFalse(uiScript.contains(FIXTURE_CODE));
+
+        Process exited = new ProcessBuilder("true").start();
+        assertEquals(0, exited.waitFor());
+        ToolException dead = assertThrows(ToolException.class, () -> WindowsSmartIdDriver.requireAlive(exited));
+        assertEquals("UI_AUTOMATION_FAILED", dead.code());
+        assertNoCode(dead.getMessage());
+
+        Path exe = temporary.resolve("qdigidoc4.exe");
+        Files.copy(Path.of("/usr/bin/sleep"), exe);
+        exe.toFile().setExecutable(true);
+        Process alive = new ProcessBuilder(exe.toString(), "30")
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start();
+        try {
+            WindowsSmartIdDriver.requireAlive(alive);
+            String command = alive.info().command().orElse("");
+            assertTrue(WindowsSmartIdDriver.qdigidoc4Command(command), command);
+            ToolException visible = assertThrows(ToolException.class, WindowsSmartIdDriver::refuseIfDigidoc4Running);
+            assertEquals("DIGIDOC4_RUNNING", visible.code());
+            assertEquals("Close DigiDoc4 and try again.", visible.getMessage());
+        } finally {
+            alive.destroyForcibly();
+            alive.waitFor(5, TimeUnit.SECONDS);
+        }
+    }
+
     @Test void oneSigningRunsAtATime() throws Exception {
         Path root = directory("allowed");
         Path fixture = TestFixtures.copyValid(root);
