@@ -15,7 +15,9 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -28,6 +30,8 @@ final class SmartIdSigning {
     static final long DEFAULT_POLL_MILLIS = 500;
     /** Unverified until the Windows spike. Evidence-based default from the issue. */
     private static final String[] INSTALL_RELATIVE = {"RIA", "DigiDoc4", "qdigidoc4.exe"};
+    private static final Set<String> CONTAINER_EXTENSIONS = Set.of(
+            ".asice", ".sce", ".bdoc", ".asics", ".scs", ".ddoc", ".edoc");
 
     private final AppConfig config;
     private final ContainerService containers;
@@ -88,6 +92,15 @@ final class SmartIdSigning {
         return target;
     }
 
+    /** DigiDoc container names. Adding a signature to an existing container is out of scope. */
+    private static boolean containerExtension(Path fileName) {
+        if (fileName == null) return false;
+        String name = fileName.toString();
+        int dot = name.lastIndexOf('.');
+        if (dot < 0) return false;
+        return CONTAINER_EXTENSIONS.contains(name.substring(dot).toLowerCase(Locale.ROOT));
+    }
+
     /** Qt {@code QFileInfo::completeBaseName}: strip the last dot unless it is the first character. */
     static String completeBaseName(String fileName) {
         int dot = fileName.lastIndexOf('.');
@@ -126,6 +139,9 @@ final class SmartIdSigning {
     private Map<String, Object> signOne(String path) throws InterruptedException {
         PathPolicy paths = new PathPolicy(config.roots());
         Path source = paths.existing(path, false);
+        if (containerExtension(Path.of(path).getFileName()) || containerExtension(source.getFileName())) {
+            throw new ToolException("INVALID_ARGUMENT", "Signing an existing container is not supported.");
+        }
         Path target = containerTarget(source);
         if (!inside(target) || Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
             if (!inside(target)) throw new ToolException("PATH_NOT_ALLOWED", "Signing target is outside the allowed roots.");

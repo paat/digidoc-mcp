@@ -61,8 +61,31 @@ class SmartIdSigningTest {
 
         Path container = Files.writeString(root.resolve("notes.asice"), "original");
         ToolException same = assertThrows(ToolException.class, () -> signing.sign(container.toString()));
-        assertEquals("TARGET_EXISTS", same.code());
+        assertEquals("INVALID_ARGUMENT", same.code());
+        assertEquals("Signing an existing container is not supported.", same.getMessage());
         assertEquals("original", Files.readString(container));
+        assertEquals(0, calls.get());
+    }
+
+    @Test void containerInputsAreRefusedBeforeTheDriverStarts() throws Exception {
+        Path root = directory("allowed");
+        AtomicInteger calls = new AtomicInteger();
+        SmartIdSigning signing = signing(root, FIXTURE_CODE, executable(),
+                (exe, file, code) -> calls.incrementAndGet(), new ManualClock(), Map.of(), summary("VALID"), 30);
+        for (String name : List.of("notes.asice", "NOTES.ASICE", "file.sce", "file.bdoc", "File.BDOC",
+                "bundle.asics", "bundle.scs", "legacy.ddoc", "legacy.edoc", "Mixed.EdOc")) {
+            Path input = Files.writeString(root.resolve(name), "container");
+            ToolException error = assertThrows(ToolException.class, () -> signing.sign(input.toString()), name);
+            assertEquals("INVALID_ARGUMENT", error.code(), name);
+            assertEquals("Signing an existing container is not supported.", error.getMessage(), name);
+            assertNoCode(error.getMessage());
+            assertEquals("container", Files.readString(input), name);
+        }
+        assertEquals(0, calls.get());
+        Path pdf = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        ToolException timedOut = assertThrows(ToolException.class, () -> signing.sign(pdf.toString()));
+        assertEquals("SIGN_TIMEOUT", timedOut.code());
+        assertEquals(1, calls.get());
     }
 
     @Test void pathOutsideRootAndSymlinkEscapeAreRefused() throws Exception {
