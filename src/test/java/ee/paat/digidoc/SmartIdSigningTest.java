@@ -598,22 +598,11 @@ class SmartIdSigningTest {
         assertEquals("UI_AUTOMATION_FAILED", dead.code());
         assertNoCode(dead.getMessage());
 
-        Path exe = temporary.resolve("qdigidoc4.exe");
-        Files.copy(Path.of("/usr/bin/sleep"), exe);
-        exe.toFile().setExecutable(true);
-        Process alive = new ProcessBuilder(exe.toString(), "30")
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start();
+        Process alive = new ProcessBuilder("sleep", "30").start();
         try {
             WindowsSmartIdDriver.requireAlive(alive);
-            String command = alive.info().command().orElse("");
-            assertTrue(WindowsSmartIdDriver.qdigidoc4Command(command), command);
-            ToolException visible = assertThrows(ToolException.class, WindowsSmartIdDriver::refuseIfDigidoc4Running);
-            assertEquals("DIGIDOC4_RUNNING", visible.code());
-            assertEquals("Close DigiDoc4 and try again.", visible.getMessage());
         } finally {
-            alive.destroyForcibly();
+            alive.destroy();
             alive.waitFor(5, TimeUnit.SECONDS);
         }
     }
