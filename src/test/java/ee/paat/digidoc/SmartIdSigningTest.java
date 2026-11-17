@@ -216,7 +216,7 @@ class SmartIdSigningTest {
         assertEquals("sign me", Files.readString(source));
     }
 
-    @Test void timeoutDeletesAnIncompleteContainerCreatedDuringTheCall() throws Exception {
+    @Test void timeoutKeepsAnUnparseablePartialFile() throws Exception {
         Path root = directory("allowed");
         Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
         Path kept = Files.writeString(root.resolve("keep.txt"), "stay");
@@ -236,7 +236,78 @@ class SmartIdSigningTest {
         ToolException error = assertThrows(ToolException.class, () -> signing.sign(source.toString()));
         assertEquals("SIGN_TIMEOUT", error.code());
         assertNoCode(error.getMessage());
+        assertTrue(Files.readString(target).startsWith("partial"));
+        assertEquals("stay", Files.readString(kept));
+        assertEquals("sign me", Files.readString(source));
+    }
+
+    @Test void timeoutKeepsAnOversizeSignedContainer() throws Exception {
+        Path root = directory("allowed");
+        byte[] signed = Files.readAllBytes(TestFixtures.copyValid(root));
+        assertTrue(signed.length > 64);
+        Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        Path target = root.resolve("contract.asice");
+        Path exe = executable();
+        AppConfig config = new AppConfig(List.of(root), 64, Configuration.Mode.TEST,
+                root.resolve("tsl"), 30, new AppConfig.Signing(FIXTURE_CODE, exe, 1));
+        SmartIdSigning signing = new SmartIdSigning(config,
+                new ContainerService(config, () -> { throw new AssertionError("validated"); }),
+                (executable, file, code) -> {
+                    try { Files.write(SmartIdSigning.containerTarget(file), signed); }
+                    catch (Exception e) { throw new IllegalStateException(e); }
+                }, new ManualClock(), Map.of(), 2_000);
+        ToolException error = assertThrows(ToolException.class, () -> signing.sign(source.toString()));
+        assertEquals("SIGN_TIMEOUT", error.code());
+        assertNoCode(error.getMessage());
+        assertArrayEquals(signed, Files.readAllBytes(target));
+        assertEquals("sign me", Files.readString(source));
+    }
+
+    @Test void timeoutKeepsAnUnreadableTarget() throws Exception {
+        Path root = directory("allowed");
+        Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        Path target = root.resolve("contract.asice");
+        byte[] body = "not-readable".getBytes(StandardCharsets.UTF_8);
+        Path exe = executable();
+        AppConfig config = new AppConfig(List.of(root), AppConfig.DEFAULT_MAX_BYTES, Configuration.Mode.TEST,
+                root.resolve("tsl"), 30, new AppConfig.Signing(FIXTURE_CODE, exe, 1));
+        SmartIdSigning signing = new SmartIdSigning(config,
+                new ContainerService(config, () -> { throw new AssertionError("validated"); }),
+                (executable, file, code) -> {
+                    try {
+                        Files.write(SmartIdSigning.containerTarget(file), body);
+                        if (!target.toFile().setReadable(false)) throw new IllegalStateException("permissions");
+                    } catch (Exception e) { throw new IllegalStateException(e); }
+                }, new ManualClock(), Map.of(), 2_000);
+        try {
+            ToolException error = assertThrows(ToolException.class, () -> signing.sign(source.toString()));
+            assertEquals("SIGN_TIMEOUT", error.code());
+            assertNoCode(error.getMessage());
+            assertTrue(target.toFile().setReadable(true));
+            assertArrayEquals(body, Files.readAllBytes(target));
+            assertEquals("sign me", Files.readString(source));
+        } finally {
+            target.toFile().setReadable(true);
+        }
+    }
+
+    @Test void timeoutDeletesAParsedUnsignedContainer() throws Exception {
+        Path root = directory("allowed");
+        Path unsigned = TestFixtures.unsigned(root, "payload.bin", new byte[] {1, 2, 3});
+        byte[] bytes = Files.readAllBytes(unsigned);
+        assertEquals(List.of(), TestFixtures.service(root).listSignatures(bytes).get("signatures"));
+        Path source = Files.writeString(root.resolve("contract.pdf"), "sign me");
+        Path target = root.resolve("contract.asice");
+        Path kept = Files.writeString(root.resolve("keep.txt"), "stay");
+        SmartIdSigning signing = signing(root, FIXTURE_CODE, executable(), (exe, file, code) -> {
+            try { Files.write(SmartIdSigning.containerTarget(file), bytes); }
+            catch (Exception e) { throw new IllegalStateException(e); }
+        }, new ManualClock(), Map.of(), () -> { throw new AssertionError("validated"); }, 1);
+        ToolException error = assertThrows(ToolException.class, () -> signing.sign(source.toString()));
+        assertEquals("SIGN_TIMEOUT", error.code());
+        assertNoCode(error.getMessage());
         assertFalse(Files.exists(target));
+        assertArrayEquals(bytes, Files.readAllBytes(unsigned));
         assertEquals("stay", Files.readString(kept));
         assertEquals("sign me", Files.readString(source));
     }

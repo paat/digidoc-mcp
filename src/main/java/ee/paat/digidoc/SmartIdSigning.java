@@ -153,7 +153,7 @@ final class SmartIdSigning {
             previous = current;
             clock.sleep(pollMillis);
         }
-        if (appeared && !target.equals(source) && !snapshotHasSignature(target)) deleteIncomplete(target);
+        if (appeared && !target.equals(source) && snapshotListsZeroSignatures(target)) deleteIncomplete(target);
         throw new ToolException("SIGN_TIMEOUT", "Signing did not finish before the deadline.");
     }
 
@@ -201,11 +201,16 @@ final class SmartIdSigning {
         return serial instanceof String value && (value.equals(code) || value.equals("PNOEE-" + code));
     }
 
-    /** Timeout keeps a target whose snapshot parses with at least one signature. */
-    private boolean snapshotHasSignature(Path target) {
+    /**
+     * Positive evidence the target is unsigned: the snapshot was read and parsed and lists
+     * zero signatures. A missing file or any read or parse failure is not evidence, so the
+     * caller keeps the target.
+     */
+    private boolean snapshotListsZeroSignatures(Path target) {
         try {
             if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return false;
-            return hasSignatures(readSnapshot(realInside(target)));
+            Object listed = containers.listSignatures(readSnapshot(realInside(target))).get("signatures");
+            return listed instanceof List<?> signatures && signatures.isEmpty();
         } catch (ToolException e) {
             return false;
         }
