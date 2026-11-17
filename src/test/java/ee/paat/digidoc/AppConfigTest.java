@@ -87,6 +87,17 @@ class AppConfigTest {
         }
     }
 
+    @Test void signingToStringRedactsThePersonalCode() {
+        String code = "60001013739";
+        AppConfig.Signing signing = new AppConfig.Signing(code, temporary.resolve("qdigidoc4.exe"), 180);
+        AppConfig config = new AppConfig(java.util.List.of(temporary), 4096, Configuration.Mode.TEST,
+                temporary.resolve("cache"), 30, signing);
+        assertFalse(signing.toString().contains(code), signing.toString());
+        assertFalse(config.toString().contains(code), config.toString());
+        assertTrue(signing.toString().contains("redacted"));
+        assertTrue(signing.toString().contains("180"));
+    }
+
     @Test void signingOnNonWindowsIsRejectedWithoutEchoingThePersonalCode() {
         String code = "60001013739";
         for (String os : java.util.List.of("Linux", "Mac OS X")) {

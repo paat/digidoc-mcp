@@ -22,7 +22,12 @@ public record AppConfig(List<Path> roots, long maxBytes, Configuration.Mode mode
     public static final long DEFAULT_SIGN_TIMEOUT_SECONDS = 180;
 
     /** Enabled Smart-ID signing. {@code digidoc4} is null when the install path is discovered at use. */
-    public record Signing(String personalCode, Path digidoc4, long timeoutSeconds) {}
+    public record Signing(String personalCode, Path digidoc4, long timeoutSeconds) {
+        @Override
+        public String toString() {
+            return "Signing[personalCode=redacted, digidoc4=" + digidoc4 + ", timeoutSeconds=" + timeoutSeconds + "]";
+        }
+    }
 
     public AppConfig(List<Path> roots, long maxBytes, Configuration.Mode mode, Path tslCache) {
         this(roots, maxBytes, mode, tslCache, DEFAULT_VALIDATION_TIMEOUT_SECONDS, null);
