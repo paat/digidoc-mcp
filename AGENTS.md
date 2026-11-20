@@ -2,6 +2,20 @@
 
 Unofficial read-only MCP server (Java 21, stdio) for inspecting and validating Estonian DigiDoc containers (ASiC-E/BDOC, ASiC-S, legacy DDOC) with DigiDoc4j and the official MCP Java SDK. Public repo (Apache-2.0). README.md is the user and API documentation; keep it in sync when tools, config variables or limits change.
 
+## Code ownership
+AI agents own this codebase: they write, review, merge and maintain it under this repo's gates and
+invariants, and there is no human developer who will catch what you miss. The owner sets product direction
+and judges results, not code. Ownership covers code, tests, CI and docs; it adds no authority over data,
+production, secrets or spend.
+- You answer for the whole codebase, including what earlier agents wrote. A defect you find is yours to
+  handle: fix the root cause when it causes or blocks your task, otherwise record it where this repo tracks
+  work. "Pre-existing" or "not my change" is never a reason to walk past it.
+- Security and customer-data findings never go into a public issue, PR or commit: flag them to the
+  owner privately.
+- A TODO or "needs human review" note finishes nothing: complete the work, or record the blocker and its
+  unblock condition.
+- Report to the owner in product terms (what works, what does not), not in code.
+
 ## Commands
 
 - Build the shaded jar: `mvn -B package` (produces `target/digidoc-mcp.jar`).
